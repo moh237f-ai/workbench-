@@ -104,3 +104,216 @@ Work Log:
 
 Stage Summary:
 - Every golden-path flow verified working in-browser; all VLM-flagged issues resolved; three themes, desktop + mobile layouts confirmed production-ready.
+
+---
+Task ID: 11 (Phase 2 planning)
+Agent: main
+Task: Design "Workbench Aurora v4 — Connected Knowledge & Flow System": PDF Library, Roadmaps, Planner, Goals v2, Reports v2, Dashboard v2, cross-feature connections
+
+## FULL DESIGN PLAN (v4)
+
+### A. Library (PDF hub) — new view `library`
+- PDFs stored client-side: blob in IndexedDB (`wb-files` DB: `blobs` + `covers` stores); light metadata in Zustand persist (localStorage).
+- ResourceFile: title, fileName, size, pageCount, deadline ("dead time"), coverMode 'page'|'custom', coverPage (default 1), tags, notes, color, currentPage, pageSeconds (per-page seconds), readPages (manual marks), archived.
+- Cover = rendered thumbnail (pdf.js, default page 1, user can pick any page or upload custom image). Covers cached in IDB, loaded async via `useFileCover` hook (module cache + skeleton).
+- Library grid: cover, title, progress ring (read pages/total), time spent, deadline countdown chip (over/soon/ok), page position, actions (Read/Edit/Link/Delete). Stats header (files, pages read, reading min this week, avg sec/page). Filters: All/Reading/Unread/Deadline soon/Archived + sort.
+- Reader overlay (`ReaderOverlay`): pdf.js canvas, page nav (arrows/keys), zoom, per-page time tracking (seconds accumulate on visible page; page ≥15s auto-counts read), live session timer, deadline countdown, linked goals/tasks chips, focus-read integration (starts pomodoro via store.startFileFocus, shows phase/remaining), immersive mode. Sessions flush to store every 10s + on close; `currentPage` persists for resume.
+- ReadingSession log: id, fileId, date, startedAt, endedAt, minutes, pagesVisited, pagesRead, startPage, endPage.
+
+### B. Files ↔ Goals/Tasks (many-to-many)
+- Item.fileIds: string[] (one file in many goals/tasks; one task with many files).
+- ItemDetailModal: Files section — link/unlink via picker, per-file progress bars, "Read" launches reader. Goals tree/board show file chips + file-count badges. Palette searches files.
+
+### C. Roadmaps — new view `roadmap`
+- Roadmap: {id, title, description, nodes, edges}. Node kinds: goal|task|file (refId → live status/progress/deadline mirror), milestone (date, done), note.
+- Canvas: SVG pan (drag bg) + zoom (wheel/btns/fit), foreignObject node cards, node drag, link mode (click A→B creates edge), delete selection, edge labels, auto-layout (layered by topological depth).
+- "Order" panel: topological order, per-node est time, CUMULATIVE time, blocked markers, critical path highlight → "see the order, the time, the process".
+- Roadmap list with progress rings (entities done/total).
+
+### D. Planner — new view `planner` (Day | Week)
+- Day: hour timeline 6–24 with now-line; item timeboxes (drag move + resize, 5-min snap, writes plannedStart/plannedEnd via updateItem — same primitives as Calendar, NO duplicate planning system); file reading blocks (new `filePlans`: {id, fileId, date, startMin, minutes, done}) in violet; click block → detail/reader.
+- Backlog sidebar: suggested items (due ≤3d/overdue/p0-p1, not yet timeboxed), reading goals (files with near deadlines / in-progress) → one-click schedule at next free slot; capacity meter vs dailyCapacityMin; "Auto-plan" greedy scheduler.
+- Week: 7 columns with compact blocks + all-day due chips (items AND file deadlines), move ±1 day buttons, click day → Day view.
+
+### E. Goals & Work v2 (more friendly)
+- Tree: indent rails, dblclick inline rename, status-dot click cycles todo→in_progress→done, quick "+ sub" inline input per node, file chip with mini progress, filter bar (status/overdue/has-files), expand/collapse all. Board: file-count badge. Detail: files tab (B).
+
+### F. Reports v2
+- Existing KPIs + Reading section (minutes by day, top files: time/pages/avg-sec-per-page/deadline risk), Goals section (per-goal progress incl. linked files), Planner adherence (blocks planned vs completed in range), Roadmap progress.
+
+### G. Dashboard v2
+- New "Reading this week" KPI, "Continue reading" strip (resume last files), unified Upcoming deadlines (items + files), roadmap progress widget, today plan snapshot.
+
+### H. Connections (all features wired)
+- Reader ↔ Focus (startFileFocus pomodoro inside reader; reading time feeds stats/reports)
+- Files ↔ Items (fileIds both directions, progress chips)
+- Roadmap ↔ Files/Items (live mirrored nodes)
+- Planner ↔ Items timeboxes + filePlans; Calendar unchanged (same primitives)
+- Palette searches: items, journal, habits, labels, entries + FILES + ROADMAPS; events `wb-open-reader` / `wb-open-file-form`
+- Today: continue-reading strip + file deadline chips. Dashboard unified deadlines. Footer: reading session live pill.
+- Sidebar/keyboard: new nav Library (G B), Roadmaps (G M), Planner (G P).
+
+### I. Foundation (main agent, BEFORE subagents)
+- types.ts v4: ResourceFile, ReadingSession, FilePlanBlock, Roadmap(+Node/Edge), Item.fileIds, ActiveTimer.fileId, ViewId + 'library'|'roadmap'|'planner'.
+- store.ts v4: persist version 4 + migrate (defaults for old data); CRUD actions for files/filePlans/roadmaps; addFilePageSeconds (batched), setFilePosition, toggleItemFile, startFileFocus; snapshots extended.
+- lib: idb.ts (blobs/covers), pdf.ts (pdfjs lazy client-only, worker at /pdf.worker.min.mjs), fileStats.ts (progress/deadline selectors), helpers additions (minToHHMM/hhmmToMin).
+- sample PDF generator (public/samples/aurora-sample-book.pdf) for E2E testing.
+
+### J. Task split
+- 12-a Library view + FileFormModal (+library.css) — subagent
+- 12-b Reader overlay (+reader.css) — subagent
+- 12-c Roadmap view + canvas (+roadmap.css) — subagent
+- 12-d Planner view (+planner.css) — subagent
+- 12-e Reports v2 + Dashboard v2 (no new css, reuse system) — subagent
+- 13 Integration (WorkbenchApp/shell/palette/ItemModals/Goals v2/Today/FocusMode) — main
+- 14 Lint/tsc/devlog fixes — main
+- 15 Browser + VLM verification + fixes — main
+
+Stage Summary:
+- Plan approved and committed; foundation coding starts immediately. Architecture stays local-first (IndexedDB for blobs/covers, Zustand persist for metadata) consistent with existing app.
+
+---
+Task ID: 12-e
+Agent: full-stack-developer (Reports + Dashboard v2)
+Task: Reports v2 + Dashboard v2 — reading/goals/planner-adherence/roadmap reporting + continue-reading strip, unified deadlines, roadmap widget on dashboard
+Work Log:
+- Read worklog Task 11 v4 plan + all mandated files (both views, types, store selectors, helpers, covers, primitives, viewCtx, globals.css class inventory).
+- ReportsView.tsx REWRITE (kept ReportsView + ReportsHeaderActions exports, pills/header + By day/By label/By item logic untouched):
+  - KPI row 4 → 6 cards: added "Reading time" (Σ wbReadingMinutesInRange, sub pages in range) and "Files on track" (at-risk+overdue count of deadline-bearing unfinished files, coral when >0, sub "X of Y with deadlines").
+  - NEW "Reading by day" daychart (readingSessions minutes/day, violet gradient bars, only days>1) after "By day".
+  - NEW "Top reading files": top 8 by minutes-in-range as bar-rows (violet fill) + meta line "X/Y pages · Z% · avg Ns/page" + deadline chip (over/soon/ok); up to 3 at-risk 0-minute files appended marked "not started" chip.
+  - NEW "Goals & linked files": top 10 active goals by deadline — progress bar (goal.color||pine, width=progress%), % value, meta "N linked files · files Z%" (fileIds ∪ direct children fileIds, avg wbFileProgress).
+  - NEW "Planner adherence" (skipped when 0 blocks in range): 4 stat-cards — timeboxes planned/done, reading blocks planned/done, adherence % (pine ≥60 / amber 30-59 / coral <30), total planned minutes (timebox plannedEnd−plannedStart + block minutes).
+  - NEW "Roadmaps" section: per-roadmap title + pbar (avg node progress: item→computeProgress, file→wbFileProgress, milestone→done, note excluded, empty→0) + % + "N nodes · M links".
+- DashboardView.tsx EXTEND (all existing widgets kept):
+  - KPI grid 4 → 5: added "Reading this week"; removed inline repeat(4,…) so grid-cards auto-fit wraps responsively.
+  - NEW "Continue reading" strip after KPIs (0<progress<100, ≤5 by lastReadAt desc): horizontal scroll (overflow-x auto, thin scrollbar), ContinueCard sub-component w/ useFileCover (84px 3/4 cover, skeleton + FileText fallback, 2-line clamp title, "p.X of Y" mono, slim pbar + %, Resume Btn + clickable cover → 'wb-open-reader' event).
+  - REPLACED "Upcoming deadlines" with unified items+files merge (deadline && <100%, archived excluded), sorted, top 6, goal-card rows w/ Target/BookOpen icons (pine/violet), Item/File meta, chip labels ("in 3d"/"2d overdue"/"due today"); item→openItemDetail, file→wb-open-reader; keyboard accessible.
+  - NEW "Roadmaps" mini widget (right col, after Signals): top-2 by updatedAt as clickable goal-cards (pbar + % + "N nodes" mono) → useWB.setState({view:'roadmap', activeRoadmapId}); "+ New" ghost Btn → createRoadmap + navigate.
+  - Quick jumps: added Library (BookOpen), Roadmaps (Waypoints), Planner (CalendarClock).
+- Verified: bunx tsc --noEmit clean (whole project), bunx eslint on both files clean (fixed React Compiler preserve-manual-memoization by inlining progress helper inside useMemo closures); dev.log clean.
+Stage Summary:
+- Reports now covers reading, linked-file goals, planner adherence and roadmap progress; Dashboard surfaces reading KPI + resume strip, unified item/file deadlines and roadmap widget — all using existing design tokens/classes only (no new CSS), fully typed + memoized.
+
+---
+Task ID: 12-d
+Agent: full-stack-developer (Planner)
+Task: Build Planner view (Day timeline + Week board) with draggable item timeboxes, violet file reading blocks, backlog panel (capacity/suggested/reading goals/auto-plan), all in plan-* CSS on design tokens.
+
+Work Log:
+- Read worklog v4 plan (§D Planner), types.ts (Item.plannedStart/plannedEnd/startDate, FilePlanBlock), store.ts (planner state/actions/filePlans CRUD/selectors), helpers.ts (v4 time helpers), primitives (Btn/IconBtn/Seg/toast/useNow), viewCtx (openItemDetail), CalendarView (timebox conventions), globals.css (tokens: --pine/--violet/--coral/--amber, .card/.chip/.seg/capacity-track patterns, scrollbar styling).
+- Created src/components/workbench/planner/PlannerView.tsx exporting PlannerView + PlannerHeaderActions (Seg Day|Week + Today ghost btn).
+- Day mode: 06:00–23:00 timeline, 56px/hour, hour hairlines + half-hour dashed, sticky-ish mono gutter labels, auto-scroll to 08:00 on mount/date change, now-line (isolated NowLine component using shared useNow ticker so only it re-renders per second) with pine line + time bubble.
+- Item timebox blocks: pine-tinted, 3px stripe = item.color (via --stripe CSS var, falls back to pine), title clamp 650, mono time range, done → strike + 60% opacity, clamped-before-6:00 "↑" indicator, min 24px height.
+- Pointer drag (move + bottom resize handle): setPointerCapture + pointercancel discard + window-level safety listeners, 5-min snap, move clamps 0..1440-dur, resize min 15min, click-vs-drag threshold 4px (click → openItemDetail / 'wb-open-reader'), commits via updateItem({plannedStart, plannedEnd, startDate}, {snapshot:true}); resize also syncs estimateMin = durMin; file blocks commit via snapshot()+updateFilePlan({startMin, minutes}).
+- File reading blocks: violet, BookOpen icon, done-circle toggle top-right (updateFilePlan({done})), hover ✕ delete (deleteFilePlan), click → 'wb-open-reader' event with fileId.
+- Backlog panel: Capacity card (Σ timebox durations + Σ file minutes vs dailyCapacityMin, plan-meter pine/coral fill, "over by Xm"); Suggested work (not done/archived/inbox, not timeboxed today, not dependency-blocked, due ≤3d/overdue/p0-p1; sorted priority→deadline; "+ Add" schedules at nextFreeSlot from max(8:00, now-if-today) in 5-min steps with toast); Reading goals (deadline ≤7d or in-progress or unread-with-deadline, sorted by deadline; pages-left + deadline chips via wbFileDeadlineStatus; "30m" adds file plan at next free slot); Auto-plan card (single lazy snapshot, greedy fill until capacity, ≤2 reading blocks, toast "Planned N blocks · Xm", disabled when nothing to plan or capacity committed).
+- Week mode: Monday-based 7-column header (weekday + date, today pine, click → Day view), per-day columns (min 320px, max-h 60vh scroll) with all-day due chips (items amber/coral-when-past → openItemDetail; file deadlines violet → reader), merged sorted compact rows (timeboxes pine dot + mono time + strike-when-done; file blocks violet dot), hover-revealed ‹ › day-shift buttons (timebox: recompute plannedStart/plannedEnd on addDaysStr; file: updateFilePlan({date})), ✕ on file rows, footer card with 7 mini bars (pine=item min, violet=reading min, today outlined) + "Planned Xh Ym · Reading Zh" totals.
+- planner.css: all plan-* prefixed, tokens only (works across light/dark/prism), custom .plan-scroll scrollbars, touch-action:none on blocks for touch dragging, @media(hover:none) keeps controls visible, ≤980px single-column day grid (backlog below) + 2-col week, prefers-reduced-motion support.
+- Verified: bunx tsc --noEmit → 0 errors; bunx eslint src/components/workbench/planner → clean; dev.log healthy.
+
+Stage Summary:
+- Files created: src/components/workbench/planner/PlannerView.tsx (exports PlannerView, PlannerHeaderActions), src/components/workbench/planner/planner.css. No other files touched.
+- Key decisions: single planning system — planner writes the same plannedStart/plannedEnd timeboxes as Calendar/Timebox modal (no duplicate); resize syncs estimateMin for consistency; suggested work additionally excludes dependency-blocked items (wbIsBlocked) since they can't be acted on; file-plan drag/delete take an explicit store.snapshot() because updateFilePlan/addFilePlan don't snapshot internally; NowLine isolated as its own component to avoid per-second re-render of the whole planner; week rows merge timeboxes + file blocks into one start-sorted list.
+- Integration notes for Task 13: import { PlannerView, PlannerHeaderActions } from './planner/PlannerView'; wire 'planner' into ViewBody/ViewHeaderActions switch + sidebar (G P) + palette.
+
+---
+Task ID: 12-a
+Agent: full-stack-developer (Library module)
+Task: Library view (PDF shelf: covers, filters, stats, hover actions, DnD import) + FileFormModal (cover controls, meta, reading insights, page time map, recent sessions) + library.css
+
+Work Log:
+- Read worklog (Task 11 v4 plan), types.ts, store.ts (v4 file actions + wb* selectors), idb.ts, pdf.ts, covers.ts, helpers.ts, primitives.tsx, GoalsView/ReportsView (style refs), globals.css (tokens + existing classes).
+- library.css — NEW lib-* classes only (toolbar/sort select, grid + drop-zone highlight, card, cover w/ shimmer skeleton + fallback tile, page badge, 2-line-clamp title, chips, progress, meta, hover-reveal actions (always visible on touch, ≥36px targets ≤640px), inline link picker w/ max-h + slim webkit scrollbar, importing chip + spinner, modal form grid, cover preview, insights grid, page time map + legend, session rows, responsive single-col ≤520px). Design tokens only; #fff solely as PDF cover backdrop.
+- LibraryView.tsx — module-level import pipeline shared by header button / drop zone / empty state: uid → putBlob → loadDocFromBlob → pageToDataUrl(1,420,0.72) → saveCover → addFile → toast; purgeFileArtifacts + error toast on failure; useSyncExternalStore-based "Importing n…" busy chip. usePdfPicker hook (hidden multi-file input, re-selectable). useCoverWithFallback (epoch-keyed timeout distinguishes shimmer vs failed tile — lint-clean, no setState-in-effect). Header actions: filter Seg (All/Reading/Unread/Deadline/Archived bound to store.libraryFilter) + Add PDF. View: 4 stat-cards (Files+total pages, Reading this week via wbReadingMinutesInRange + pages sub, Pages read this week via wbReadingPagesInRange, weighted avg sec/visited page), sort select (Recent/Deadline/Progress/Title, local), lib-grid cards: cover (click→'wb-open-reader', p.X/Y badge), title (click→'wb-open-file-form'), deadline chip (wbFileDeadlineStatus + daysUntil: "3d left"/"2d overdue"/"due today"/done), pbar + "42% · 5/12p", fmtDuration time, tag chips, linked-count chip; hover actions Read/Edit/Link/Delete; Link = inline picker (search + active items, toggleItemFile + toast, linked-first sort); Delete = confirm → purge + deleteFile + toast. Filters per spec (deadline = set && (status!=='ok' || pct<100); archived isolated, others exclude archived). Drag & drop of PDFs onto grid/empty-state with dashed pine highlight + non-PDF toast. Empty states (no files at all / filter mismatch with Show-all shortcut). Archived cards get grayscale cover + chip.
+- FileFormModal.tsx — signature ({ fileId, onClose }); hooks-before-guard pattern (file may vanish mid-edit). Two-col wide modal: live cover preview (useFileCover) + cover Seg page|custom — page mode: number input 1..pageCount applies live (updateFile + refreshCover, blur-safe text state); custom mode: image upload → FileReader → applyCustomCover + updateFile. Right: Title/Deadline/Tags(comma→string[] deduped)/Notes/SWATCHES color. Insights grid (total time, avg sec/page, sessions count, current page). Page time map (10px cells, pine-scaled 0→15s+, manual readPages ring, "Page N · Xm Ys" tooltips, max-h 120 scroll + legend). Recent sessions (latest 5, "Mar 3 · 24m · 6 pages · p.2→8"). Footer: Delete (left, danger, confirm→purge+delete+close) / spacer / Cancel / Save (patches updateFile, validates title).
+- Cross-feature events only: 'wb-open-reader', 'wb-open-file-form' (dispatched, never imported other components). No other files touched.
+- Fixed react-hooks/set-state-in-effect in useCoverWithFallback by epoch-keying the timeout state; removed an unused type import. `bunx tsc --noEmit` clean; `bunx eslint src/components/workbench/library` clean; dev.log shows healthy compiles.
+
+Stage Summary:
+- Files created: src/components/workbench/library/LibraryView.tsx (exports LibraryView, LibraryHeaderActions), src/components/workbench/library/FileFormModal.tsx (exports FileFormModal({ fileId, onClose })), src/components/workbench/library/library.css (lib-* only, imported by both tsx).
+- Key decisions: module-level import queue + useSyncExternalStore count so the busy chip tracks drops as well as the header button; per-instance hidden inputs (header + view + empty state) sharing one pipeline; cover fallback via 2.4s epoch-keyed grace timer since useFileCover can't signal failure; link picker is inline in-card (violet accent) with toggle semantics; all live cover edits (mode/page/custom upload) apply immediately, meta fields apply on Save.
+- Ready for wiring: add LibraryView/LibraryHeaderActions to WorkbenchApp view registries, mount FileFormModal on 'wb-open-file-form', ReaderOverlay (12-b) consumes 'wb-open-reader'.
+
+---
+Task ID: 12-b
+Agent: full-stack-developer (Reader overlay)
+Task: Build the full-screen PDF ReaderOverlay (pdf.js canvas, per-page time tracking, focus-read, immersive mode) + reader.css
+Work Log:
+- Read worklog v4 plan, types/store/pdf/helpers/covers, primitives, FocusMode + ItemModals for conventions and exact store API signatures.
+- reader/ReaderOverlay.tsx: createPortal→body, z-900, `ReaderOverlay({ fileId, onClose })`. loadFileDoc with loading/error/file-missing states; fit-width default (ResizeObserver + computed padding, debounced), zoom ±10% clamp 50–300% + Fit reset + % display; serialized canvas paints (promise chain + seq guard) so rapid page/zoom changes never race pdf.js renders.
+- Reading-time core: 1s tick gated on document.visibilityState; pending Map<page,secs> flushed every 10s + on page change + on unmount via addFilePageSeconds; visited/newly-read Sets with immutable mount snapshot of pageSeconds/readPages to detect 15s (PAGE_READ_THRESHOLD_SEC) threshold crossings; logReadingSession on close when elapsed ≥ 60s (startPage/endPage/pagesVisited/pagesRead, minutes=max(1,round)).
+- Nav: prev/next (disabled at bounds), page input (Enter applies, clamped, Esc blurs+resets), ←/→/PageUp/PageDown/Home/End (ignored in inputs or while a modal is open above), setFilePosition on every change, stage scrolls to top.
+- Header chrome: title + p.X of Y + slim read-pages progress + meta, deadline chip (wbFileDeadlineStatus + daysUntil → "3d left"/"2d overdue"/"Due today"/"Complete"), linked item chips (wbItemsForFile, icon by type, → 'wb-open-item' event), live session clock (fmtClock mono via shared useNow), time-on-page counter, close. Focus-read: start Btn / phase badge + mm:ss + pause/resume/skip/end (stopTimer + toast('Session logged')) / "Timer running elsewhere" chip; pomodoro auto-advances at 0 while focus-reading (mirrors FocusMode).
+- Footer toolbar: zoom out/%/in/Fit | prev/input/next | Mark read/Unread toggle (markFilePage, reflects file.readPages) | immersive toggle (PanelTopClose/Open) | session clock.
+- Immersive: reader-immersive collapses header+footer (animated max-height/padding/translate), chrome returns on mousemove or tap (touch support) and auto-hides after 2.6s; Esc exits immersive first, else closes.
+- reader.css: rd-* only, tokens throughout (surface-solid panels, hairline borders, shadow-lg canvas, pine/amber/coral/violet accents), themed thin scrollbars, mobile wrap + 44px coarse-pointer targets, reduced-motion support. Canvas paper white is the sole non-token color (PDF content paints over it).
+- Verified: `bunx tsc --noEmit` 0 errors; `bunx eslint src/components/workbench/reader` clean. No other files modified.
+Stage Summary:
+- Files: src/components/workbench/reader/ReaderOverlay.tsx (+ reader.css). Export: `ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: () => void })`.
+- Key decisions: render serialization via promise chain (no cancel API in renderPageToCanvas), exact fit-width from computed stage padding, threshold-crossing math against mount snapshot, nav keys yield to any open modal overlay, z-index 900 per spec (integrator must keep modals/toasts above — modal-overlay currently z-120 in globals.css).
+
+---
+Task ID: 12-c (completed by main after subagent context-exhaustion)
+Agent: main
+Task: Complete the Roadmaps module (canvas was finished by subagent; view written by main)
+
+Work Log:
+- Subagent delivered RoadmapCanvas.tsx (704 lines: pan/zoom SVG, foreignObject node cards, link mode, bezier edges + labels, topo helpers, nodeLive mirroring) + roadmap.css (676 lines incl. all view classes) but ran out of context before RoadmapView.tsx.
+- Fixed React Compiler violations in canvas: latest-value refs now synced via useEffect (was assigned during render); auto-fit/fit-on-demand deferred via requestAnimationFrame.
+- Wrote RoadmapView.tsx: list screen (progress rings, inline rename, delete, empty state) + workspace (toolbar with add-node popover: goal/task/file pickers + milestone/note mini-forms, link toggle, auto-layout, fit, zoom pill, order panel toggle, selection actions incl. edge label editor) + Execution Order panel (topological order, running cumulative Σ time, blocked markers, critical-path DP highlight, total estimate).
+- Moved order computation to module-scope pure function (compiler-safe).
+
+Stage Summary:
+- Roadmaps fully functional: create/rename/delete, 5 node kinds with live entity mirroring, connect edges with labels, auto-layout, fit/zoom, execution order with critical path. Verified E2E in browser.
+
+---
+Task ID: 13
+Agent: main
+Task: Integration — wire all v4 modules into the app shell and upgrade existing views
+
+Work Log:
+- globals.css: modal-overlay z 120→940, toast-stack 300→960 (above reader overlay 900).
+- WorkbenchApp: registered library/roadmap/planner views + header actions; mounted ReaderOverlay + FileFormModal; wb-open-reader / wb-open-file-form event hosts; G+B/G+M/G+P key map; excluded new views from default Capture/New buttons.
+- shell.tsx: NAV + Library (G B) / Roadmaps (G M) / Planner (G P); footer: file count, reading minutes/pages, Reading-phase timer pill color.
+- CommandPalette: Go-to commands for 3 new views; global search over files (→ reader) and roadmaps (→ canvas); hint text updated.
+- ItemModals ItemDetailModal: Linked-files section — per-file progress bars, Read (opens reader), unlink, searchable picker, guidance copy. (one file ↔ many goals/tasks)
+- GoalsView v2: filter bar (All/Active/Done + Overdue + With files toggles, filterTree keeps matching ancestors), dblclick inline rename, status-dot click cycles todo→in_progress→done, inline quick-add sub-item per node, violet file chips with avg reading %, sub-item count on caret, expand/collapse all, board file-count badges.
+- TodayView: Continue-reading strip (cover thumbnails, p.X/Y, resume); unified Deadlines (items + files with reading meta, click → reader).
+- FocusMode: file context card (title, p.X/Y, pages read, %) + BookOpen icon when activeTimer.fileId.
+- CalendarView: Planner shortcut button. MiscModals: new shortcuts documented.
+
+Stage Summary:
+- Every feature now cross-wired: files↔items, roadmap↔entities, reader↔focus, planner↔timeboxes+filePlans, palette↔everything, sidebar/keyboard complete.
+
+---
+Task ID: 14
+Agent: main
+Task: Quality gates
+
+Work Log:
+- Fixed pre-existing latent tsc errors (undo/redo return types, getFocusTiming param, stats spread), excluded examples/skills/upload/tests/tool-results from tsconfig + eslint; public/** excluded (minified pdf worker).
+- covers.ts useFileCover restructured to keyed-map state (no setState-in-effect).
+- tsc --noEmit: 0 errors. ESLint: 0 errors 0 warnings. dev.log: clean compiles, 200s, no runtime errors.
+
+Stage Summary:
+- Whole project type-clean and lint-clean.
+
+---
+Task ID: 15
+Agent: main
+Task: Browser E2E + VLM verification of the full v4 system
+
+Work Log:
+- E2E verified with agent-browser (30 screenshots): sample PDF (tests/make-sample-pdf.mjs → public/samples) injected via DataTransfer → upload pipeline (blob→IDB, pdf.js pageCount=8, cover render, card with stats/filters/sort); READER: page render + nav (buttons + ←/→ + input), zoom, per-page seconds tracking (pageSeconds persisted), currentPage=4 resume, session logged (readingMinutes=1), deadline chip, FOCUS-READ pomodoro inside reader (pause freezes, skip, end logs), immersive mode.
+- FileForm: deadline set (+5d → "5d left" chip), cover page 1→3 (regenerated + persisted), tags/notes/color, page-time heatmap, recent sessions.
+- LINKING: goal "Master ODE for the exam" + 2 sub-tasks created via quick-add; file linked to goal AND task from library Link picker (many-to-many); file chip with 13% reading progress on goal tree; ItemDetail Files section verified.
+- ROADMAP: created "ODE Exam Prep Plan", added goal/task/file/milestone nodes, linked chain (3 edges), auto-layout, Order panel: 1.Goal CRITICAL 30m Σ30m → 2.Task CRITICAL 30m Σ1h → 3.File CRITICAL 09-20 7m Σ1h7m → 4.Milestone 10-01 — exactly "order + time + process".
+- PLANNER: day timeline with now-line, reading block scheduled at next free slot (11:10–11:40), capacity "1 block · 30m planned", week view 7 columns + 2-col mobile fallback.
+- REPORTS: Reading by day, Top reading files, Goals & linked files, Planner adherence, Roadmaps sections + 6 KPIs. DASHBOARD: Continue reading, Reading this week KPI, unified deadlines, Roadmaps widget, quick jumps.
+- Palette search finds files/roadmaps; G+B/M/P shortcuts work.
+- VLM review rounds: (1) core 4 views OK; (2) goals/reports/dashboard OK, dark library flagged bottom cut-off → verified false alarm (page scrolls, footer clear); (3) mobile round: stat-note clip = false alarm, week label = intended ellipsis, dev-tools badge misread; REAL fix applied: mobile roadmap fit-zoom floor 0.62 (nodes were 35% → unreadable) — re-verified readable, nothing clipped; (4) reader + file form OK; final Today OK.
+- Fixed during verification: roadmap canvas ref-during-render, setState-in-effect (×2), stray typo, unused imports.
+
+Stage Summary:
+- Full v4 system verified end-to-end in the browser across light/dark/prism and desktop/mobile; all VLM-flagged issues resolved or confirmed false alarms. Production-ready.

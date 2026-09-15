@@ -1,0 +1,543 @@
+/* ==================== Workbench Aurora — Planner (Day & Week) ==================== */
+/* All classes prefixed plan- · design tokens only (light / dark / prism) */
+
+/* ---------- shared scroll style ---------- */
+.plan-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--muted2) 38%, transparent) transparent;
+}
+.plan-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.plan-scroll::-webkit-scrollbar-track { background: transparent; }
+.plan-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted2) 34%, transparent);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 99px;
+}
+.plan-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted2) 52%, transparent);
+  background-clip: padding-box;
+}
+
+/* ---------- nav bar ---------- */
+.plan-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.plan-nav-title { font-size: 19px; font-weight: 750; }
+.plan-nav-actions { display: flex; align-items: center; gap: 6px; }
+
+/* ---------- day grid: timeline + backlog ---------- */
+.plan-day-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  gap: 16px;
+  align-items: start;
+}
+
+/* ---------- timeline ---------- */
+.plan-tl-card { padding: 14px 16px 12px; }
+.plan-tl-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+.plan-tl-count { font-size: 12.5px; font-weight: 650; color: var(--muted2); }
+
+.plan-tl-scroll {
+  max-height: 72vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px 4px 4px 0;
+}
+.plan-tl { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr); }
+.plan-tl-gutter { position: relative; }
+.plan-tl-gutter > span {
+  position: absolute;
+  right: 10px;
+  line-height: 1;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted2);
+}
+.plan-tl-lanes {
+  position: relative;
+  overflow: hidden;
+  border-left: 1px solid var(--hairline);
+  border-radius: 0 10px 10px 0;
+  background: color-mix(in srgb, var(--surface-solid) 40%, transparent);
+}
+.plan-hour-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--hairline);
+  pointer-events: none;
+}
+.plan-half-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed color-mix(in srgb, var(--ink) 8%, transparent);
+  pointer-events: none;
+}
+
+/* now line */
+.plan-now {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 2px solid var(--pine);
+  z-index: 4;
+  pointer-events: none;
+}
+.plan-now-bubble {
+  position: absolute;
+  left: 8px;
+  top: -10px;
+  padding: 2px 7px;
+  border-radius: 7px;
+  background: var(--pine);
+  color: var(--surface-solid);
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  box-shadow: var(--shadow-sm);
+}
+
+/* empty day hint */
+.plan-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 0 24px;
+  pointer-events: none;
+  z-index: 1;
+}
+.plan-empty-title {
+  font-family: var(--font-sora), var(--font-inter), sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--muted2);
+}
+.plan-empty-sub { margin-top: 5px; font-size: 12.5px; color: var(--faint); }
+
+/* ---------- blocks ---------- */
+.plan-block {
+  position: absolute;
+  left: 7px;
+  right: 9px;
+  z-index: 2;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  border-left: 3px solid var(--stripe, var(--pine));
+  padding: 4px 9px 6px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  overflow: hidden;
+  transition: box-shadow 0.15s var(--ease);
+}
+.plan-block:hover { box-shadow: var(--shadow-md); }
+.plan-block.dragging { z-index: 10; cursor: grabbing; box-shadow: var(--shadow-lg); }
+.plan-block-item { background: var(--pine-light); }
+.plan-block-file { background: var(--violet-light); border-left-color: var(--violet); }
+.plan-block.done { opacity: 0.6; }
+.plan-block.done .plan-block-title { text-decoration: line-through; }
+.plan-block-time {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--muted2);
+}
+.plan-block-ico { color: var(--violet); }
+.plan-block-title {
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-block-file .plan-block-time,
+.plan-block-file .plan-block-title { padding-right: 46px; }
+
+/* resize handle */
+.plan-block-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 15px;
+  cursor: ns-resize;
+  touch-action: none;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.plan-block-resize::after {
+  content: '';
+  display: block;
+  margin: 7px auto 0;
+  width: 34px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--pine);
+}
+.plan-block-file .plan-block-resize::after { background: var(--violet); }
+.plan-block:hover .plan-block-resize,
+.plan-block.dragging .plan-block-resize { opacity: 1; }
+
+/* reading-block controls */
+.plan-check {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--violet);
+  background: transparent;
+  color: transparent;
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+.plan-check:hover { background: var(--violet-light); }
+.plan-check.on { background: var(--violet); color: var(--surface-solid); }
+.plan-x {
+  position: absolute;
+  top: 4px;
+  right: 28px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.plan-block:hover .plan-x { opacity: 1; }
+.plan-x:hover { background: var(--coral-light); color: var(--coral); }
+
+/* ---------- backlog side ---------- */
+.plan-side { display: grid; gap: 14px; }
+.plan-card { padding: 15px 17px; }
+.plan-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.plan-card-title {
+  font-family: var(--font-sora), var(--font-inter), sans-serif;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.plan-card-count {
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: 99px;
+  background: var(--surface-alt);
+  color: var(--muted2);
+  font-size: 11px;
+  font-weight: 700;
+}
+.plan-cap-num { font-size: 11.5px; font-weight: 700; color: var(--muted2); }
+
+/* capacity meter */
+.plan-meter {
+  height: 10px;
+  border-radius: 99px;
+  background: var(--surface-alt);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  overflow: hidden;
+}
+.plan-meter > span {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--pine), var(--aurora-3));
+  transition: width 0.45s var(--ease);
+}
+.plan-meter.over > span { background: linear-gradient(90deg, var(--coral), var(--amber)); }
+.plan-meter-note { margin-top: 7px; font-size: 11.5px; color: var(--muted2); }
+.plan-meter-note.over { color: var(--coral); font-weight: 650; }
+
+/* suggested / reading rows */
+.plan-sug-list {
+  display: grid;
+  gap: 8px;
+  max-height: 288px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.plan-sug-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 7px 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-solid) 55%, transparent);
+  transition: border-color 0.15s var(--ease);
+}
+.plan-sug-row:hover { border-color: color-mix(in srgb, var(--pine) 28%, var(--hairline)); }
+.plan-read-ico { color: var(--violet); flex-shrink: 0; }
+.plan-sug-main { min-width: 0; flex: 1; display: grid; gap: 4px; }
+.plan-sug-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-sug-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+.plan-side-empty { padding: 14px 4px; font-size: 12.5px; color: var(--faint); text-align: center; }
+.plan-autop-note {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted2);
+}
+
+/* ---------- week mode ---------- */
+.plan-week { display: grid; gap: 12px; }
+
+.plan-wk-head {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.plan-wk-dayhead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 7px 4px 8px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: all 0.15s var(--ease);
+}
+.plan-wk-dayhead:hover {
+  border-color: var(--hairline);
+  transform: translateY(-1px);
+}
+.plan-wk-dayhead.today {
+  border-color: color-mix(in srgb, var(--pine) 40%, var(--hairline));
+  background: var(--pine-light);
+}
+.plan-wk-dow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 750;
+  color: var(--muted2);
+}
+.plan-wk-dayhead.today .plan-wk-dow { color: var(--pine); }
+.plan-wk-num { font-size: 15px; font-weight: 750; color: var(--ink); }
+.plan-wk-dayhead.today .plan-wk-num { color: var(--pine); }
+
+.plan-wk-cols {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.plan-wk-col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 320px;
+  max-height: 60vh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.plan-wk-col.today { border-color: color-mix(in srgb, var(--pine) 36%, var(--hairline)); }
+
+/* all-day due chips */
+.plan-wk-all { display: grid; gap: 4px; }
+.plan-wk-due {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 8px;
+  background: var(--amber-light);
+  color: var(--amber);
+  font-size: 10.5px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-wk-due:hover { filter: brightness(1.05); }
+.plan-wk-due.past { background: var(--coral-light); color: var(--coral); }
+.plan-wk-due.file { background: var(--violet-light); color: var(--violet); }
+
+/* compact block rows */
+.plan-wk-rows { display: grid; gap: 4px; align-content: start; }
+.plan-wk-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.plan-wk-row:hover {
+  background: var(--surface-alt);
+  border-color: var(--hairline);
+}
+.plan-wk-row.done .plan-wk-label { text-decoration: line-through; opacity: 0.6; }
+.plan-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.plan-dot.pine { background: var(--pine); }
+.plan-dot.violet { background: var(--violet); }
+.plan-wk-time { font-size: 10px; font-weight: 700; color: var(--muted2); flex-shrink: 0; }
+.plan-wk-label {
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-wk-moves {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.plan-wk-row:hover .plan-wk-moves,
+.plan-wk-row:focus-within .plan-wk-moves { opacity: 1; }
+.plan-wk-moves button {
+  width: 22px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.plan-wk-moves button:hover {
+  background: var(--surface-solid);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+.plan-wk-moves .plan-wk-x:hover { color: var(--coral); }
+.plan-wk-free { padding: 10px 0; text-align: center; color: var(--faint); font-size: 11px; }
+
+/* week footer — per-day bars */
+.plan-wk-foot {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  flex-wrap: wrap;
+  padding: 14px 20px;
+}
+.plan-wk-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 9px;
+  height: 78px;
+  flex: 1;
+  min-width: 240px;
+}
+.plan-wk-bar-col {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.plan-wk-bar {
+  width: 100%;
+  max-width: 36px;
+  height: 52px;
+  border-radius: 7px;
+  background: var(--surface-alt);
+  box-shadow: inset 0 0 0 1px var(--hairline);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+.plan-wk-bar-col.today .plan-wk-bar {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+.plan-wk-bar > span { display: flex; flex-direction: column; width: 100%; }
+.plan-wk-bar i { display: block; width: 100%; }
+.plan-wk-bar i.bi { background: var(--pine); }
+.plan-wk-bar i.bf { background: var(--violet); }
+.plan-wk-bar-l {
+  font-size: 9.5px;
+  font-weight: 750;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.plan-wk-bar-col.today .plan-wk-bar-l { color: var(--pine); }
+.plan-wk-totals { font-size: 12px; font-weight: 700; color: var(--muted2); }
+
+/* ---------- responsive ---------- */
+@media (max-width: 980px) {
+  .plan-day-grid { grid-template-columns: 1fr; }
+  .plan-wk-head,
+  .plan-wk-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plan-wk-col { min-height: 240px; max-height: 46vh; }
+  .plan-tl-scroll { max-height: 62vh; }
+}
+
+/* touch devices: no hover — keep controls visible */
+@media (hover: none) {
+  .plan-x { opacity: 1; }
+  .plan-block-resize { opacity: 0.85; }
+  .plan-wk-moves { opacity: 1; }
+}
+
+/* ---------- reduced motion ---------- */
+@media (prefers-reduced-motion: reduce) {
+  .plan-block,
+  .plan-meter > span,
+  .plan-wk-moves,
+  .plan-wk-dayhead { transition: none; }
+  .plan-wk-dayhead:hover { transform: none; }
+}

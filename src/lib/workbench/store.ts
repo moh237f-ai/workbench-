@@ -4,8 +4,9 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
-  ActiveTimer, CalendarSystem, ClockType, Entry, FocusTiming, GraphView, Habit,
-  Item, ItemStatus, JournalEntry, Label, ReportRange, ThemeId, ViewId,
+  ActiveTimer, CalendarSystem, ClockType, Entry, FilePlanBlock, FocusTiming, GraphView, Habit,
+  Item, ItemStatus, JournalEntry, Label, ReadingSession, ReportRange, ResourceFile, Roadmap,
+  RoadmapEdge, RoadmapNode, ThemeId, ViewId,
 } from './types';
 import { SWATCHES, FOCUS_PRESETS } from './types';
 import {
@@ -14,6 +15,7 @@ import {
 
 const STORAGE_KEY = 'workbench_aurora_v3';
 const MAX_HIST = 80;
+const MAX_READING_SESSIONS = 400;
 
 /* ---------- defaults ---------- */
 
@@ -34,10 +36,48 @@ export function makeItem(partial: Partial<Item> = {}): Item {
     estimateMin: null,
     nextAction: '',
     dependsOn: [],
+    fileIds: [],
     plannedStart: null,
     plannedEnd: null,
     startDate: null,
     completedAt: null,
+    createdAt: now,
+    updatedAt: now,
+    ...partial,
+  };
+}
+
+export function makeFile(partial: Partial<ResourceFile> = {}): ResourceFile {
+  return {
+    id: uid(),
+    title: 'Untitled PDF',
+    fileName: 'file.pdf',
+    size: 0,
+    pageCount: 1,
+    addedAt: new Date().toISOString(),
+    deadline: null,
+    coverMode: 'page',
+    coverPage: 1,
+    color: null,
+    tags: [],
+    notes: '',
+    currentPage: 1,
+    pageSeconds: {},
+    readPages: [],
+    lastReadAt: null,
+    archived: false,
+    ...partial,
+  };
+}
+
+export function makeRoadmap(partial: Partial<Roadmap> = {}): Roadmap {
+  const now = new Date().toISOString();
+  return {
+    id: uid(),
+    title: 'New roadmap',
+    description: '',
+    nodes: [],
+    edges: [],
     createdAt: now,
     updatedAt: now,
     ...partial,
@@ -69,6 +109,12 @@ export interface WBState {
   journal: JournalEntry[];
   activeTimer: ActiveTimer | null;
   expanded: Record<string, boolean>;
+  /* v4 data */
+  files: ResourceFile[];
+  readingSessions: ReadingSession[];
+  filePlans: FilePlanBlock[];
+  roadmaps: Roadmap[];
+  activeRoadmapId: string | null;
   /* ui */
   theme: ThemeId;
   view: ViewId;
@@ -77,6 +123,9 @@ export interface WBState {
   calendarSystem: CalendarSystem;
   calMonthOffset: number;
   calendarSelectedDate: string;
+  plannerMode: 'day' | 'week';
+  plannerDate: string;
+  libraryFilter: 'all' | 'reading' | 'unread' | 'deadline' | 'archived';
   focusOpen: boolean;
   focusClockType: ClockType;
   focusBackground: string;
@@ -85,7 +134,7 @@ export interface WBState {
   focusCustomBreak: number;
   focusCompact: boolean;
   dailyCapacityMin: number;
-  stats: { focusSessions: number; focusMinutes: number };
+  stats: { focusSessions: number; focusMinutes: number; readingMinutes: number; pagesRead: number };
   lastSavedAt: string | null;
   /* history (session only) */
   undoStack: string[];
@@ -127,8 +176,41 @@ export interface WBState {
 
   saveJournal: (date: string, content: string) => void;
 
+  /* ---------- v4: library files ---------- */
+  addFile: (partial: Partial<ResourceFile>) => ResourceFile;
+  updateFile: (id: string, patch: Partial<ResourceFile>) => void;
+  deleteFile: (id: string) => void;
+  setFilePosition: (id: string, page: number) => void;
+  addFilePageSeconds: (id: string, page: number, seconds: number) => void;
+  markFilePage: (id: string, page: number, read: boolean) => void;
+  logReadingSession: (session: Omit<ReadingSession, 'id'>) => void;
+  toggleItemFile: (itemId: string, fileId: string) => void;
+
+  /* ---------- v4: file plan blocks ---------- */
+  addFilePlan: (fileId: string, date: string, startMin: number, minutes: number) => FilePlanBlock;
+  updateFilePlan: (id: string, patch: Partial<FilePlanBlock>) => void;
+  deleteFilePlan: (id: string) => void;
+
+  /* ---------- v4: roadmaps ---------- */
+  createRoadmap: (title: string) => Roadmap;
+  updateRoadmap: (id: string, patch: Partial<Pick<Roadmap, 'title' | 'description'>>) => void;
+  deleteRoadmap: (id: string) => void;
+  setActiveRoadmap: (id: string | null) => void;
+  addRoadmapNode: (roadmapId: string, node: Omit<RoadmapNode, 'id'>) => RoadmapNode;
+  updateRoadmapNode: (roadmapId: string, nodeId: string, patch: Partial<RoadmapNode>) => void;
+  removeRoadmapNode: (roadmapId: string, nodeId: string) => void;
+  addRoadmapEdge: (roadmapId: string, from: string, to: string, label?: string) => void;
+  updateRoadmapEdge: (roadmapId: string, edgeId: string, patch: Partial<RoadmapEdge>) => void;
+  removeRoadmapEdge: (roadmapId: string, edgeId: string) => void;
+
+  setPlannerMode: (m: 'day' | 'week') => void;
+  setPlannerDate: (d: string) => void;
+  navigatePlanner: (deltaDays: number) => void;
+  setLibraryFilter: (f: 'all' | 'reading' | 'unread' | 'deadline' | 'archived') => void;
+
   startTimer: (labelIds: string[], note: string, itemIds?: string[]) => void;
   startItemFocus: (itemId: string) => boolean;
+  startFileFocus: (fileId: string) => boolean;
   startPomodoro: (itemIds?: string[]) => void;
   pausePomodoro: () => void;
   resumePomodoro: () => void;
@@ -143,8 +225,8 @@ export interface WBState {
   toggleFocusCompact: () => void;
 
   snapshot: () => void;
-  undo: () => void;
-  redo: () => void;
+  undo: () => boolean;
+  redo: () => boolean;
 
   importData: (raw: unknown) => string | null;
   exportData: () => string;
@@ -161,6 +243,10 @@ function coreSnapshot(s: WBState): string {
     habits: s.habits,
     journal: s.journal,
     activeTimer: s.activeTimer,
+    files: s.files,
+    readingSessions: s.readingSessions,
+    filePlans: s.filePlans,
+    roadmaps: s.roadmaps,
   });
 }
 
@@ -199,6 +285,11 @@ export const useWB = create<WBState>()(
       journal: [],
       activeTimer: null,
       expanded: {},
+      files: [],
+      readingSessions: [],
+      filePlans: [],
+      roadmaps: [],
+      activeRoadmapId: null,
 
       theme: 'light',
       view: 'today',
@@ -207,6 +298,9 @@ export const useWB = create<WBState>()(
       calendarSystem: 'gregorian',
       calMonthOffset: 0,
       calendarSelectedDate: todayStr(),
+      plannerMode: 'day',
+      plannerDate: todayStr(),
+      libraryFilter: 'all',
       focusOpen: false,
       focusClockType: 'analog',
       focusBackground: 'aurora',
@@ -215,7 +309,7 @@ export const useWB = create<WBState>()(
       focusCustomBreak: 10,
       focusCompact: false,
       dailyCapacityMin: 240,
-      stats: { focusSessions: 0, focusMinutes: 0 },
+      stats: { focusSessions: 0, focusMinutes: 0, readingMinutes: 0, pagesRead: 0 },
       lastSavedAt: null,
       undoStack: [],
       redoStack: [],
@@ -354,10 +448,200 @@ export const useWB = create<WBState>()(
           };
         }),
 
+      /* ---------- v4: library files ---------- */
+      addFile: (partial) => {
+        const file = makeFile(partial);
+        set((s) => ({ files: [...s.files, file] }));
+        return file;
+      },
+      updateFile: (id, patch) =>
+        set((s) => ({
+          files: s.files.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+        })),
+      deleteFile: (id) => {
+        get().snapshot();
+        set((s) => ({
+          files: s.files.filter((f) => f.id !== id),
+          readingSessions: s.readingSessions.filter((r) => r.fileId !== id),
+          filePlans: s.filePlans.filter((p) => p.fileId !== id),
+          items: s.items.map((i) => ({ ...i, fileIds: (i.fileIds || []).filter((x) => x !== id) })),
+          roadmaps: s.roadmaps.map((r) => ({
+            ...r,
+            nodes: r.nodes.filter((n) => !(n.kind === 'file' && n.refId === id)),
+            edges: (() => {
+              const removed = r.nodes.filter((n) => n.kind === 'file' && n.refId === id).map((n) => n.id);
+              return r.edges.filter((e) => !removed.includes(e.from) && !removed.includes(e.to));
+            })(),
+          })),
+        }));
+      },
+      setFilePosition: (id, page) =>
+        set((s) => ({
+          files: s.files.map((f) =>
+            f.id === id
+              ? { ...f, currentPage: Math.max(1, Math.min(f.pageCount, page)), lastReadAt: new Date().toISOString() }
+              : f
+          ),
+        })),
+      addFilePageSeconds: (id, page, seconds) =>
+        set((s) => ({
+          files: s.files.map((f) => {
+            if (f.id !== id) return f;
+            const key = String(page);
+            const pageSeconds = { ...f.pageSeconds, [key]: (f.pageSeconds[key] || 0) + seconds };
+            return { ...f, pageSeconds, lastReadAt: new Date().toISOString() };
+          }),
+        })),
+      markFilePage: (id, page, read) =>
+        set((s) => ({
+          files: s.files.map((f) => {
+            if (f.id !== id) return f;
+            const key = String(page);
+            const readPages = read
+              ? Array.from(new Set([...f.readPages, key]))
+              : f.readPages.filter((p) => p !== key);
+            return { ...f, readPages };
+          }),
+        })),
+      logReadingSession: (session) => {
+        if (session.minutes < 1) return; // ignore <1s noise
+        set((s) => ({
+          readingSessions: [...s.readingSessions, { ...session, id: uid() }].slice(-MAX_READING_SESSIONS),
+          stats: {
+            ...s.stats,
+            readingMinutes: s.stats.readingMinutes + session.minutes,
+            pagesRead: s.stats.pagesRead + session.pagesRead,
+          },
+        }));
+      },
+      toggleItemFile: (itemId, fileId) =>
+        set((s) => ({
+          items: s.items.map((i) =>
+            i.id === itemId
+              ? {
+                  ...i,
+                  fileIds: (i.fileIds || []).includes(fileId)
+                    ? (i.fileIds || []).filter((x) => x !== fileId)
+                    : [...(i.fileIds || []), fileId],
+                  updatedAt: new Date().toISOString(),
+                }
+              : i
+          ),
+        })),
+
+      /* ---------- v4: file plan blocks ---------- */
+      addFilePlan: (fileId, date, startMin, minutes) => {
+        const plan: FilePlanBlock = { id: uid(), fileId, date, startMin, minutes, done: false };
+        set((s) => ({ filePlans: [...s.filePlans, plan] }));
+        return plan;
+      },
+      updateFilePlan: (id, patch) =>
+        set((s) => ({ filePlans: s.filePlans.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
+      deleteFilePlan: (id) => {
+        get().snapshot();
+        set((s) => ({ filePlans: s.filePlans.filter((p) => p.id !== id) }));
+      },
+
+      /* ---------- v4: roadmaps ---------- */
+      createRoadmap: (title) => {
+        const rm = makeRoadmap({ title });
+        set((s) => ({ roadmaps: [...s.roadmaps, rm], activeRoadmapId: rm.id }));
+        return rm;
+      },
+      updateRoadmap: (id, patch) =>
+        set((s) => ({
+          roadmaps: s.roadmaps.map((r) =>
+            r.id === id ? { ...r, ...patch, updatedAt: new Date().toISOString() } : r
+          ),
+        })),
+      deleteRoadmap: (id) => {
+        get().snapshot();
+        set((s) => ({
+          roadmaps: s.roadmaps.filter((r) => r.id !== id),
+          activeRoadmapId: s.activeRoadmapId === id ? null : s.activeRoadmapId,
+        }));
+      },
+      setActiveRoadmap: (id) => set({ activeRoadmapId: id }),
+      addRoadmapNode: (roadmapId, node) => {
+        const full: RoadmapNode = { ...node, id: uid() };
+        set((s) => ({
+          roadmaps: s.roadmaps.map((r) =>
+            r.id === roadmapId ? { ...r, nodes: [...r.nodes, full], updatedAt: new Date().toISOString() } : r
+          ),
+        }));
+        return full;
+      },
+      updateRoadmapNode: (roadmapId, nodeId, patch) =>
+        set((s) => ({
+          roadmaps: s.roadmaps.map((r) =>
+            r.id === roadmapId
+              ? {
+                  ...r,
+                  nodes: r.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)),
+                  updatedAt: new Date().toISOString(),
+                }
+              : r
+          ),
+        })),
+      removeRoadmapNode: (roadmapId, nodeId) =>
+        set((s) => ({
+          roadmaps: s.roadmaps.map((r) =>
+            r.id === roadmapId
+              ? {
+                  ...r,
+                  nodes: r.nodes.filter((n) => n.id !== nodeId),
+                  edges: r.edges.filter((e) => e.from !== nodeId && e.to !== nodeId),
+                  updatedAt: new Date().toISOString(),
+                }
+              : r
+          ),
+        })),
+      addRoadmapEdge: (roadmapId, from, to, label = '') => {
+        set((s) => {
+          const rm = s.roadmaps.find((r) => r.id === roadmapId);
+          if (!rm) return {};
+          if (from === to) return {};
+          if (rm.edges.some((e) => e.from === from && e.to === to)) return {};
+          return {
+            roadmaps: s.roadmaps.map((r) =>
+              r.id === roadmapId
+                ? { ...r, edges: [...r.edges, { id: uid(), from, to, label }], updatedAt: new Date().toISOString() }
+                : r
+            ),
+          };
+        });
+      },
+      updateRoadmapEdge: (roadmapId, edgeId, patch) =>
+        set((s) => ({
+          roadmaps: s.roadmaps.map((r) =>
+            r.id === roadmapId
+              ? { ...r, edges: r.edges.map((e) => (e.id === edgeId ? { ...e, ...patch } : e)), updatedAt: new Date().toISOString() }
+              : r
+          ),
+        })),
+      removeRoadmapEdge: (roadmapId, edgeId) =>
+        set((s) => ({
+          roadmaps: s.roadmaps.map((r) =>
+            r.id === roadmapId
+              ? { ...r, edges: r.edges.filter((e) => e.id !== edgeId), updatedAt: new Date().toISOString() }
+              : r
+          ),
+        })),
+
+      setPlannerMode: (m) => set({ plannerMode: m }),
+      setPlannerDate: (d) => set({ plannerDate: d }),
+      navigatePlanner: (deltaDays) =>
+        set((s) => {
+          const d = new Date(s.plannerDate + 'T12:00:00');
+          d.setDate(d.getDate() + deltaDays);
+          return { plannerDate: isoDate(d) };
+        }),
+      setLibraryFilter: (f) => set({ libraryFilter: f }),
+
       startTimer: (labelIds, note, itemIds = []) => {
         get().snapshot();
         set({
-          activeTimer: { startedAt: new Date().toISOString(), labelIds, itemIds, note, pomodoro: null },
+          activeTimer: { startedAt: new Date().toISOString(), labelIds, itemIds, fileId: null, note, pomodoro: null },
         });
       },
       startItemFocus: (itemId) => {
@@ -378,11 +662,32 @@ export const useWB = create<WBState>()(
             startedAt: new Date().toISOString(),
             labelIds,
             itemIds: [itemId],
+            fileId: null,
             note: item.title,
             pomodoro: { workMin, breakMin, phase: 'work', cycle: 0, pausedAt: null },
           },
         });
         if (['todo', 'inbox', 'waiting'].includes(item.status)) get().setItemStatus(itemId, 'in_progress');
+        return true;
+      },
+      startFileFocus: (fileId) => {
+        const s = get();
+        if (s.activeTimer) return false;
+        const file = s.files.find((f) => f.id === fileId);
+        if (!file) return false;
+        const preset = FOCUS_PRESETS.find((p) => p.id === s.focusPreset) || FOCUS_PRESETS[0];
+        const workMin = s.focusPreset === 'custom' ? s.focusCustomWork : preset.workMin;
+        const breakMin = s.focusPreset === 'custom' ? s.focusCustomBreak : preset.breakMin;
+        set({
+          activeTimer: {
+            startedAt: new Date().toISOString(),
+            labelIds: [],
+            itemIds: [],
+            fileId,
+            note: `Reading · ${file.title}`,
+            pomodoro: { workMin, breakMin, phase: 'work', cycle: 0, pausedAt: null },
+          },
+        });
         return true;
       },
       startPomodoro: (itemIds = []) => {
@@ -395,6 +700,7 @@ export const useWB = create<WBState>()(
             startedAt: new Date().toISOString(),
             labelIds: [],
             itemIds,
+            fileId: null,
             note: '',
             pomodoro: { workMin, breakMin, phase: 'work', cycle: 0, pausedAt: null },
           },
@@ -454,6 +760,7 @@ export const useWB = create<WBState>()(
           },
           stats: wasWork
             ? {
+                ...s.stats,
                 focusSessions: s.stats.focusSessions + 1,
                 focusMinutes: s.stats.focusMinutes + durationMin,
               }
@@ -498,12 +805,16 @@ export const useWB = create<WBState>()(
         set({
           undoStack: s.undoStack.slice(0, -1),
           redoStack: [...s.redoStack, coreSnapshot(s)],
-          items: prev.items,
-          labels: prev.labels,
-          entries: prev.entries,
-          habits: prev.habits,
-          journal: prev.journal,
-          activeTimer: prev.activeTimer,
+          items: prev.items ?? s.items,
+          labels: prev.labels ?? s.labels,
+          entries: prev.entries ?? s.entries,
+          habits: prev.habits ?? s.habits,
+          journal: prev.journal ?? s.journal,
+          activeTimer: prev.activeTimer ?? null,
+          files: prev.files ?? s.files,
+          readingSessions: prev.readingSessions ?? s.readingSessions,
+          filePlans: prev.filePlans ?? s.filePlans,
+          roadmaps: prev.roadmaps ?? s.roadmaps,
         });
         return true;
       },
@@ -514,12 +825,16 @@ export const useWB = create<WBState>()(
         set({
           redoStack: s.redoStack.slice(0, -1),
           undoStack: [...s.undoStack, coreSnapshot(s)],
-          items: next.items,
-          labels: next.labels,
-          entries: next.entries,
-          habits: next.habits,
-          journal: next.journal,
-          activeTimer: next.activeTimer,
+          items: next.items ?? s.items,
+          labels: next.labels ?? s.labels,
+          entries: next.entries ?? s.entries,
+          habits: next.habits ?? s.habits,
+          journal: next.journal ?? s.journal,
+          activeTimer: next.activeTimer ?? null,
+          files: next.files ?? s.files,
+          readingSessions: next.readingSessions ?? s.readingSessions,
+          filePlans: next.filePlans ?? s.filePlans,
+          roadmaps: next.roadmaps ?? s.roadmaps,
         });
         return true;
       },
@@ -555,8 +870,32 @@ export const useWB = create<WBState>()(
             updatedAt: new Date().toISOString(),
             ...j,
           }));
+          const files = ((data.files as Partial<ResourceFile>[]) || []).map((f) => makeFile(f));
+          const readingSessions = ((data.readingSessions as Partial<ReadingSession>[]) || []).map((r) => ({
+            id: uid(),
+            fileId: '',
+            date: todayStr(),
+            startedAt: new Date().toISOString(),
+            endedAt: new Date().toISOString(),
+            minutes: 0,
+            pagesVisited: 0,
+            pagesRead: 0,
+            startPage: 1,
+            endPage: 1,
+            ...r,
+          }));
+          const filePlans = ((data.filePlans as Partial<FilePlanBlock>[]) || []).map((p) => ({
+            id: uid(),
+            fileId: '',
+            date: todayStr(),
+            startMin: 540,
+            minutes: 30,
+            done: false,
+            ...p,
+          }));
+          const roadmaps = ((data.roadmaps as Partial<Roadmap>[]) || []).map((r) => makeRoadmap(r));
           get().snapshot();
-          set({ items, labels, entries, habits, journal });
+          set({ items, labels, entries, habits, journal, files, readingSessions, filePlans, roadmaps });
           return null;
         } catch (e) {
           return e instanceof Error ? e.message : 'Import failed';
@@ -567,7 +906,7 @@ export const useWB = create<WBState>()(
         return JSON.stringify(
           {
             app: 'workbench-aurora',
-            schemaVersion: 3,
+            schemaVersion: 4,
             exportedAt: new Date().toISOString(),
             items: s.items,
             labels: s.labels,
@@ -575,6 +914,10 @@ export const useWB = create<WBState>()(
             habits: s.habits,
             journal: s.journal,
             stats: s.stats,
+            files: s.files,
+            readingSessions: s.readingSessions,
+            filePlans: s.filePlans,
+            roadmaps: s.roadmaps,
           },
           null,
           2
@@ -586,6 +929,29 @@ export const useWB = create<WBState>()(
       name: STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
+      version: 4,
+      migrate: (persisted: unknown) => {
+        const p = (persisted || {}) as Record<string, unknown>;
+        const items = Array.isArray(p.items)
+          ? (p.items as Partial<Item>[]).map((i) => makeItem(i))
+          : [];
+        const stats = (p.stats as WBState['stats']) || { focusSessions: 0, focusMinutes: 0, readingMinutes: 0, pagesRead: 0 };
+        if (typeof stats.readingMinutes !== 'number') stats.readingMinutes = 0;
+        if (typeof stats.pagesRead !== 'number') stats.pagesRead = 0;
+        return {
+          ...p,
+          items,
+          files: Array.isArray(p.files) ? (p.files as Partial<ResourceFile>[]).map((f) => makeFile(f)) : [],
+          readingSessions: Array.isArray(p.readingSessions) ? p.readingSessions : [],
+          filePlans: Array.isArray(p.filePlans) ? p.filePlans : [],
+          roadmaps: Array.isArray(p.roadmaps) ? (p.roadmaps as Partial<Roadmap>[]).map((r) => makeRoadmap(r)) : [],
+          activeRoadmapId: (p.activeRoadmapId as string | null) ?? null,
+          plannerMode: (p.plannerMode as 'day' | 'week') ?? 'day',
+          plannerDate: (p.plannerDate as string) ?? todayStr(),
+          libraryFilter: (p.libraryFilter as WBState['libraryFilter']) ?? 'all',
+          stats,
+        };
+      },
       partialize: (s) => ({
         theme: s.theme,
         view: s.view,
@@ -594,6 +960,9 @@ export const useWB = create<WBState>()(
         calendarSystem: s.calendarSystem,
         calMonthOffset: s.calMonthOffset,
         calendarSelectedDate: s.calendarSelectedDate,
+        plannerMode: s.plannerMode,
+        plannerDate: s.plannerDate,
+        libraryFilter: s.libraryFilter,
         focusClockType: s.focusClockType,
         focusBackground: s.focusBackground,
         focusPreset: s.focusPreset,
@@ -609,6 +978,11 @@ export const useWB = create<WBState>()(
         journal: s.journal,
         activeTimer: s.activeTimer,
         expanded: s.expanded,
+        files: s.files,
+        readingSessions: s.readingSessions,
+        filePlans: s.filePlans,
+        roadmaps: s.roadmaps,
+        activeRoadmapId: s.activeRoadmapId,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
@@ -714,4 +1088,71 @@ export function wbInsights(items: Item[], entries: Entry[], capacity: number): s
   if (logged >= 240) a.push(`${Math.round(logged / 60)}h logged today — protect your recovery time.`);
   if (!a.length) a.push('The system is stable. Protect your next action and keep capacity realistic.');
   return a;
+}
+
+/* ---------- v4: file selectors ---------- */
+
+export const PAGE_READ_THRESHOLD_SEC = 15;
+
+export function wbFileReadPages(file: ResourceFile): number {
+  let count = 0;
+  for (let p = 1; p <= file.pageCount; p++) {
+    const key = String(p);
+    if (file.readPages.includes(key) || (file.pageSeconds[key] || 0) >= PAGE_READ_THRESHOLD_SEC) count++;
+  }
+  return count;
+}
+
+export function wbFileProgress(file: ResourceFile): number {
+  if (!file.pageCount) return 0;
+  return Math.round((wbFileReadPages(file) / file.pageCount) * 100);
+}
+
+export function wbFileSeconds(file: ResourceFile): number {
+  return Object.values(file.pageSeconds || {}).reduce((s, v) => s + v, 0);
+}
+
+export function wbFileMinutes(file: ResourceFile): number {
+  return Math.round(wbFileSeconds(file) / 60);
+}
+
+export function wbFileAvgSecPerPage(file: ResourceFile): number {
+  const visited = Object.values(file.pageSeconds || {}).filter((v) => v > 0).length;
+  return visited ? Math.round(wbFileSeconds(file) / visited) : 0;
+}
+
+export type FileDeadlineStatus = 'over' | 'soon' | 'ok' | null;
+
+export function wbFileDeadlineStatus(file: ResourceFile): FileDeadlineStatus {
+  if (!file.deadline) return null;
+  const pct = wbFileProgress(file);
+  if (pct >= 100) return 'ok';
+  const du = Math.round(
+    (new Date(file.deadline + 'T12:00:00').getTime() - new Date(todayStr() + 'T12:00:00').getTime()) / 86400000
+  );
+  if (du < 0) return 'over';
+  if (du <= 3) return 'soon';
+  return 'ok';
+}
+
+export function wbItemsForFile(items: Item[], fileId: string): Item[] {
+  return items.filter((i) => (i.fileIds || []).includes(fileId));
+}
+
+export function wbFilePlansForDate(filePlans: FilePlanBlock[], date: string): FilePlanBlock[] {
+  return filePlans
+    .filter((p) => p.date === date)
+    .sort((a, b) => a.startMin - b.startMin);
+}
+
+export function wbReadingMinutesInRange(readingSessions: ReadingSession[], from: string, to: string): number {
+  return readingSessions
+    .filter((r) => r.date >= from && r.date <= to)
+    .reduce((s, r) => s + r.minutes, 0);
+}
+
+export function wbReadingPagesInRange(readingSessions: ReadingSession[], from: string, to: string): number {
+  return readingSessions
+    .filter((r) => r.date >= from && r.date <= to)
+    .reduce((s, r) => s + r.pagesRead, 0);
 }

@@ -4,9 +4,9 @@
 import React, { useEffect, useState } from 'react';
 import {
   Play, Pause, Square, SkipForward, X, Maximize2, Minus, Image as ImageIcon,
-  Focus as FocusIcon, Target, Clock, Sparkles,
+  Focus as FocusIcon, Target, Clock, Sparkles, BookOpen,
 } from 'lucide-react';
-import { useWB } from '@/lib/workbench/store';
+import { useWB, wbFileProgress, wbFileReadPages } from '@/lib/workbench/store';
 import { getFocusTiming } from '@/lib/workbench/helpers';
 import { FOCUS_BACKGROUNDS, FOCUS_PRESETS } from '@/lib/workbench/types';
 import type { ClockType } from '@/lib/workbench/types';
@@ -24,6 +24,7 @@ export function FocusMode() {
   const focusOpen = useWB((s) => s.focusOpen);
   const activeTimer = useWB((s) => s.activeTimer);
   const items = useWB((s) => s.items);
+  const files = useWB((s) => s.files);
   const clockType = useWB((s) => s.focusClockType);
   const background = useWB((s) => s.focusBackground);
   const preset = useWB((s) => s.focusPreset);
@@ -82,10 +83,12 @@ export function FocusMode() {
   const focusItem = activeTimer?.itemIds?.[0]
     ? items.find((i) => i.id === activeTimer.itemIds[0])
     : null;
-  const contextTitle = focusItem?.title || 'Open focus space';
-  const contextNext =
-    focusItem?.nextAction ||
-    (activeTimer?.note ? activeTimer.note : 'No task selected — focus on one useful thing.');
+  const focusFile = activeTimer?.fileId ? files.find((f) => f.id === activeTimer.fileId) : null;
+  const contextTitle = (focusFile && `Reading · ${focusFile.title}`) || focusItem?.title || 'Open focus space';
+  const contextNext = focusFile
+    ? `p.${focusFile.currentPage} of ${focusFile.pageCount} · ${wbFileReadPages(focusFile)} pages read · ${wbFileProgress(focusFile)}%`
+    : focusItem?.nextAction ||
+      (activeTimer?.note ? activeTimer.note : 'No task selected — focus on one useful thing.');
 
   const presetObj = FOCUS_PRESETS.find((p) => p.id === preset) || FOCUS_PRESETS[0];
   const workMin = preset === 'custom' ? customWork : presetObj.workMin;
@@ -113,7 +116,7 @@ export function FocusMode() {
       <div className="focus-topbar">
         <div className="focus-context-card">
           <div className="focus-context-icon">
-            {hasTimer ? <Play size={15} /> : <FocusIcon size={15} />}
+            {focusFile ? <BookOpen size={15} /> : hasTimer ? <Play size={15} /> : <FocusIcon size={15} />}
           </div>
           <div>
             <div className="focus-context-kicker">

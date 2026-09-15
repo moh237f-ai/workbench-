@@ -3,11 +3,12 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Sun, LayoutGrid, Target, Clock, Repeat, BookOpen, CalendarDays, BarChart3, Inbox,
+  Sun, LayoutGrid, Target, Clock, Repeat, BookOpen, Library as LibraryIcon, Waypoints,
+  CalendarDays, CalendarClock, BarChart3, Inbox,
   Play, Square, Focus, Tag, Download, Palette, Undo2, Sparkles, Search as SearchIcon,
   CornerDownLeft, FileText,
 } from 'lucide-react';
-import { useWB, wbChildren } from '@/lib/workbench/store';
+import { useWB, wbChildren, wbFileProgress } from '@/lib/workbench/store';
 import { computeProgress, computeStreak, fmtDuration } from '@/lib/workbench/helpers';
 import { Modal } from '../ui/primitives';
 
@@ -69,6 +70,9 @@ export function CommandPalette({
       { id: 'v-inbox', group: 'Go to', label: 'Inbox', icon: <Inbox size={16} />, action: go('inbox') },
       { id: 'v-dash', group: 'Go to', label: 'Dashboard', icon: <LayoutGrid size={16} />, action: go('dashboard') },
       { id: 'v-goals', group: 'Go to', label: 'Goals & Work', icon: <Target size={16} />, action: go('goals') },
+      { id: 'v-library', group: 'Go to', label: 'Library', sub: 'G B', icon: <LibraryIcon size={16} />, action: go('library') },
+      { id: 'v-roadmap', group: 'Go to', label: 'Roadmaps', sub: 'G M', icon: <Waypoints size={16} />, action: go('roadmap') },
+      { id: 'v-planner', group: 'Go to', label: 'Planner', sub: 'G P', icon: <CalendarClock size={16} />, action: go('planner') },
       { id: 'v-log', group: 'Go to', label: 'Activity Log', icon: <Clock size={16} />, action: go('log') },
       { id: 'v-habits', group: 'Go to', label: 'Habits', icon: <Repeat size={16} />, action: go('habits') },
       { id: 'v-journal', group: 'Go to', label: 'Journal', icon: <BookOpen size={16} />, action: go('journal') },
@@ -97,6 +101,39 @@ export function CommandPalette({
           sub: `${pct}% · ${i.status.replace('_', ' ')}`,
           icon: <Target size={16} />,
           action: () => { onClose(); onOpenItemDetail(i.id); },
+        });
+      }
+    });
+    /* library files */
+    store.files.forEach((f) => {
+      if ((f.title + ' ' + f.fileName + ' ' + f.tags.join(' ')).toLowerCase().includes(query)) {
+        out.push({
+          id: `file-${f.id}`,
+          group: 'Library',
+          label: f.title,
+          sub: `${wbFileProgress(f)}% · p.${f.currentPage}/${f.pageCount}`,
+          icon: <FileText size={16} />,
+          action: () => {
+            onClose();
+            window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: f.id }));
+          },
+        });
+      }
+    });
+    /* roadmaps */
+    store.roadmaps.forEach((r) => {
+      if ((r.title + ' ' + r.description).toLowerCase().includes(query)) {
+        out.push({
+          id: `rm-${r.id}`,
+          group: 'Roadmaps',
+          label: r.title,
+          sub: `${r.nodes.length} nodes · ${r.edges.length} links`,
+          icon: <Waypoints size={16} />,
+          action: () => {
+            onClose();
+            store.setActiveRoadmap(r.id);
+            store.setView('roadmap');
+          },
         });
       }
     });
@@ -153,7 +190,7 @@ export function CommandPalette({
       }
     });
     return out.slice(0, 40);
-  }, [q, commands, store.items, store.journal, store.habits, store.labels, store.entries, onClose, onOpenLabels]);
+  }, [q, commands, store.items, store.journal, store.habits, store.labels, store.entries, store.files, store.roadmaps, onClose, onOpenLabels]);
 
   const grouped = useMemo(() => {
     const m: Map<string, CmdRow[]> = new Map();
@@ -207,7 +244,7 @@ export function CommandPalette({
         <div className="cmdk-list" ref={listRef} onKeyDown={(e) => e.stopPropagation()}>
           {!q && (
             <div className="cmdk-group" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <SearchIcon size={11} /> Type to search tasks, journal, habits, labels…
+              <SearchIcon size={11} /> Type to search tasks, files, roadmaps, journal, habits, labels…
             </div>
           )}
           {grouped.map(([group, rows]) => (

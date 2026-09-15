@@ -7,10 +7,11 @@ import {
   type DragEndEvent, type DragStartEvent,
 } from '@dnd-kit/core';
 import {
-  Plus, Pencil, Trash2, ChevronRight, Tag, GripVertical, AlertTriangle,
+  Plus, Pencil, Trash2, ChevronRight, Tag, GripVertical, AlertTriangle, BookOpen,
+  ChevronsDownUp, ChevronsUpDown,
 } from 'lucide-react';
 import {
-  useWB, wbBlockedCount, wbChildren, wbIsBlocked, wbRootItems,
+  useWB, wbBlockedCount, wbChildren, wbFileProgress, wbIsBlocked, wbRootItems,
 } from '@/lib/workbench/store';
 import { computeProgress, daysUntil, deadlineStatus, priorityLabel } from '@/lib/workbench/helpers';
 import type { GraphView, Item, ItemStatus } from '@/lib/workbench/types';
@@ -76,19 +77,95 @@ export function GoalsView() {
 
 /* ---------- Tree ---------- */
 
+type StatusFilter = 'all' | 'active' | 'done';
+
+function matchesFilters(
+  item: Item,
+  items: Item[],
+  statusFilter: StatusFilter,
+  overdueOnly: boolean,
+  filesOnly: boolean
+): boolean {
+  const pct = computeProgress(item, (id) => wbChildren(items, id));
+  if (statusFilter === 'active' && (pct >= 100 || ['done', 'archived'].includes(item.status))) return false;
+  if (statusFilter === 'done' && (pct < 100 || item.status !== 'done')) return false;
+  if (overdueOnly && deadlineStatus(item, pct) !== 'over') return false;
+  if (filesOnly && !(item.fileIds || []).length) return false;
+  return true;
+}
+
+/** keep an item only when it matches OR one of its descendants matches */
+function filterTree(items: Item[], roots: Item[], fn: (i: Item) => boolean): Item[] {
+  const keep = new Set<string>();
+  const walk = (i: Item): boolean => {
+    const kids = wbChildren(items, i.id);
+    const kidsKeep = kids.map(walk);
+    const self = fn(i);
+    if (self || kidsKeep.some(Boolean)) {
+      keep.add(i.id);
+      return true;
+    }
+    return false;
+  };
+  roots.forEach(walk);
+  return items.filter((i) => keep.has(i.id));
+}
+
 function TreeView() {
   const items = useWB((s) => s.items);
+  const files = useWB((s) => s.files);
   const expanded = useWB((s) => s.expanded);
   const toggleExpanded = useWB((s) => s.toggleExpanded);
   const deleteItemCascade = useWB((s) => s.deleteItemCascade);
+  const updateItem = useWB((s) => s.updateItem);
+  const setItemStatus = useWB((s) => s.setItemStatus);
   const { openItemForm, openItemDetail } = useViewActions();
 
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  const [filesOnly, setFilesOnly] = useState(false);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [quickAdd, setQuickAdd] = useState<string | null>(null);
+  const [quickDraft, setQuickDraft] = useState('');
+
+  const hasFilters = statusFilter !== 'all' || overdueOnly || filesOnly;
+  const visible = hasFilters
+    ? filterTree(items, wbRootItems(items), (i) =>
+        matchesFilters(i, items, statusFilter, overdueOnly, filesOnly)
+      )
+    : items;
+  const visibleRoots = wbRootItems(visible);
+
+  const cycleStatus = (item: Item) => {
+    const nextStatus: ItemStatus =
+      item.status === 'todo' || item.status === 'inbox'
+        ? 'in_progress'
+        : item.status === 'in_progress'
+          ? 'done'
+          : 'todo';
+    setItemStatus(item.id, nextStatus);
+    toast(nextStatus === 'done' ? 'Marked done' : nextStatus === 'in_progress' ? 'Started' : 'Reopened', item.title);
+  };
+
+  const statusColor = (item: Item): string => {
+    if (item.status === 'done') return 'var(--pine)';
+    if (item.status === 'in_progress') return 'var(--amber)';
+    if (item.status === 'waiting') return 'var(--coral)';
+    return 'var(--faint)';
+  };
+
   const renderNode = (item: Item, depth: number): React.ReactNode => {
-    const children = wbChildren(items, item.id);
-    const isOpen = expanded[item.id] !== false;
+    const children = wbChildren(visible, item.id);
+    const allKids = wbChildren(items, item.id);
+    const isOpen = hasFilters ? true : expanded[item.id] !== false;
     const pct = computeProgress(item, (id) => wbChildren(items, id));
     const st = deadlineStatus(item, pct);
     const blockedCount = wbBlockedCount(items, item);
+    const linkedFiles = files.filter((f) => (item.fileIds || []).includes(f.id) && !f.archived);
+    const filesPct = linkedFiles.length
+      ? Math.round(linkedFiles.reduce((s, f) => s + wbFileProgress(f), 0) / linkedFiles.length)
+      : null;
     let dueChip: React.ReactNode = null;
     if (item.deadline) {
       const du = daysUntil(item.deadline);
@@ -99,21 +176,83 @@ function TreeView() {
       <div className="tree-node" key={item.id}>
         <div className="tree-row">
           <span
-            className={`tree-caret ${children.length ? (isOpen ? 'open' : '') : 'leaf'}`}
-            onClick={() => children.length && toggleExpanded(item.id)}
-            role={children.length ? 'button' : undefined}
-            aria-label={children.length ? (isOpen ? 'Collapse' : 'Expand') : undefined}
+            className={`tree-caret ${allKids.length ? (isOpen ? 'open' : '') : 'leaf'}`}
+            onClick={() => allKids.length && toggleExpanded(item.id)}
+            role={allKids.length ? 'button' : undefined}
+            aria-label={allKids.length ? (isOpen ? 'Collapse' : 'Expand') : undefined}
           >
             <ChevronRight />
+            {allKids.length > 1 && (
+              <span className="mono" style={{ fontSize: 9, position: 'absolute', left: 13, top: 9, color: 'var(--faint)' }}>
+                {allKids.length}
+              </span>
+            )}
           </span>
-          <span className="tree-dot" style={{ background: item.color || (item.type === 'goal' ? 'var(--pine)' : 'var(--faint)') }} />
-          <span className="tree-title" onClick={() => openItemDetail(item.id)} title={item.title} role="button">
-            {item.title}
-          </span>
+          <span
+            className="tree-dot"
+            style={{
+              background: statusColor(item),
+              cursor: 'pointer',
+              boxShadow: item.status === 'in_progress' ? '0 0 0 3px var(--amber-light)' : undefined,
+            }}
+            onClick={() => cycleStatus(item)}
+            role="button"
+            title="Click to cycle: todo → in progress → done"
+            aria-label={`Status: ${item.status}. Click to change.`}
+          />
+          {renaming === item.id ? (
+            <input
+              autoFocus
+              className="tree-title"
+              style={{
+                borderBottom: '2px solid var(--pine)', outline: 'none', background: 'transparent',
+                padding: '0 2px', minWidth: 120, width: 'min(320px, 40vw)',
+              }}
+              value={renameDraft}
+              onChange={(e) => setRenameDraft(e.target.value)}
+              onBlur={() => {
+                const t = renameDraft.trim();
+                if (t && t !== item.title) {
+                  updateItem(item.id, { title: t });
+                  toast('Renamed', t);
+                }
+                setRenaming(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                if (e.key === 'Escape') setRenaming(null);
+              }}
+            />
+          ) : (
+            <span
+              className="tree-title"
+              onClick={() => openItemDetail(item.id)}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                setRenameDraft(item.title);
+                setRenaming(item.id);
+              }}
+              title={`${item.title} — double-click to rename`}
+              role="button"
+            >
+              {item.title}
+            </span>
+          )}
           <span className="tree-meta">
             {blockedCount > 0 && (
               <span className="chip chip-over" title={`${blockedCount} unmet dependencies`}>
                 <AlertTriangle size={11} /> {blockedCount}
+              </span>
+            )}
+            {linkedFiles.length > 0 && (
+              <span
+                className="chip"
+                style={{ background: 'var(--violet-light)', color: 'var(--violet)', gap: 4 }}
+                title={`${linkedFiles.map((f) => f.title).join(', ')} — reading ${filesPct}%`}
+                onClick={() => openItemDetail(item.id)}
+                role="button"
+              >
+                <BookOpen size={11} /> {linkedFiles.length} {filesPct !== null ? `${filesPct}%` : ''}
               </span>
             )}
             {item.status === 'done' && <span className="chip chip-done">done</span>}
@@ -124,10 +263,18 @@ function TreeView() {
             <span className="tree-pct">{pct}%</span>
             {dueChip}
             <span className="tree-actions">
-              <IconBtn small title="Add sub-item" onClick={(e) => { e.stopPropagation(); openItemForm(item.id); }}>
+              <IconBtn
+                small
+                title="Add sub-item"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setQuickAdd(item.id);
+                  setQuickDraft('');
+                }}
+              >
                 <Plus size={14} />
               </IconBtn>
-              <IconBtn small title="Edit" onClick={(e) => { e.stopPropagation(); openItemDetail(item.id); }}>
+              <IconBtn small title="Edit details" onClick={(e) => { e.stopPropagation(); openItemDetail(item.id); }}>
                 <Pencil size={14} />
               </IconBtn>
               <IconBtn
@@ -136,7 +283,7 @@ function TreeView() {
                 title="Delete"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (confirm(`Delete "${item.title}"${children.length ? ' and all sub-items' : ''}?`)) {
+                  if (confirm(`Delete "${item.title}"${allKids.length ? ' and all sub-items' : ''}?`)) {
                     deleteItemCascade(item.id);
                     toast('Deleted', item.title);
                   }
@@ -147,16 +294,98 @@ function TreeView() {
             </span>
           </span>
         </div>
-        {children.length > 0 && isOpen && (
+        {quickAdd === item.id && (
+          <div className="tree-children" style={{ borderLeftStyle: 'dashed' }}>
+            <div className="tree-row" style={{ paddingLeft: 2 }}>
+              <input
+                autoFocus
+                className="tree-title"
+                style={{
+                  borderBottom: '2px solid var(--pine)', outline: 'none', background: 'transparent',
+                  padding: '0 2px', minWidth: 160, flex: 1,
+                }}
+                placeholder="New sub-item — Enter to add, Esc to cancel"
+                value={quickDraft}
+                onChange={(e) => setQuickDraft(e.target.value)}
+                onBlur={() => {
+                  const t = quickDraft.trim();
+                  if (t) {
+                    useWB.getState().addItem({
+                      title: t,
+                      type: 'task',
+                      parentId: item.id,
+                      status: 'todo',
+                    });
+                    toast('Sub-item added', t);
+                  }
+                  setQuickAdd(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') setQuickAdd(null);
+                }}
+              />
+            </div>
+          </div>
+        )}
+        {allKids.length > 0 && isOpen && (
           <div className="tree-children">{children.map((c) => renderNode(c, depth + 1))}</div>
         )}
       </div>
     );
   };
 
+  const allExpanded = items.every((i) => expanded[i.id] !== false);
+
   return (
-    <div className="card" style={{ padding: 10 }}>
-      {wbRootItems(items).map((i) => renderNode(i, 0))}
+    <div className="fade-in">
+      <div className="action-bar" style={{ marginBottom: 10, flexWrap: 'wrap' }}>
+        <Seg<StatusFilter>
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={[
+            { id: 'all', label: 'All' },
+            { id: 'active', label: 'Active' },
+            { id: 'done', label: 'Done' },
+          ]}
+        />
+        <Btn
+          size="sm"
+          className={overdueOnly ? 'btn-primary' : ''}
+          onClick={() => setOverdueOnly((v) => !v)}
+        >
+          <AlertTriangle size={13} /> Overdue
+        </Btn>
+        <Btn
+          size="sm"
+          className={filesOnly ? 'btn-primary' : ''}
+          onClick={() => setFilesOnly((v) => !v)}
+        >
+          <BookOpen size={13} /> With files
+        </Btn>
+        <span className="spacer" />
+        <Btn
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            const next: Record<string, boolean> = {};
+            items.forEach((i) => (next[i.id] = !allExpanded));
+            useWB.setState({ expanded: next });
+          }}
+        >
+          {allExpanded ? <ChevronsDownUp size={13} /> : <ChevronsUpDown size={13} />}
+          {allExpanded ? 'Collapse all' : 'Expand all'}
+        </Btn>
+      </div>
+      <div className="card" style={{ padding: 10 }}>
+        {visibleRoots.length ? (
+          visibleRoots.map((i) => renderNode(i, 0))
+        ) : (
+          <div style={{ textAlign: 'center', color: 'var(--faint)', fontSize: 12.5, padding: '22px 8px' }}>
+            {hasFilters ? 'Nothing matches these filters.' : 'Nothing here yet.'}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -250,9 +479,13 @@ function BoardColumn({
 
 function BoardCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void }) {
   const items = useWB((s) => s.items);
+  const files = useWB((s) => s.files);
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: item.id });
   const pct = computeProgress(item, (id) => wbChildren(items, id));
   const blocked = wbIsBlocked(items, item);
+  const fileCount = (item.fileIds || []).filter((fid) =>
+    files.some((f) => f.id === fid && !f.archived)
+  ).length;
   return (
     <div
       ref={setNodeRef}
@@ -272,6 +505,11 @@ function BoardCard({ item, onOpen }: { item: Item; onOpen: (id: string) => void 
         <span className="chip chip-ok" style={{ fontSize: 10 }}>{priorityLabel(item.priority)}</span>
         {item.deadline && <span className="mono" style={{ fontSize: 10, color: 'var(--muted2)' }}>{item.deadline.slice(5)}</span>}
         {blocked && <span className="chip chip-over" style={{ fontSize: 10 }}>blocked</span>}
+        {fileCount > 0 && (
+          <span className="chip" style={{ fontSize: 10, background: 'var(--violet-light)', color: 'var(--violet)' }}>
+            <BookOpen size={10} /> {fileCount}
+          </span>
+        )}
         {pct > 0 && pct < 100 && <span className="mono" style={{ fontSize: 10, color: 'var(--pine)' }}>{pct}%</span>}
         {item.estimateMin != null && <span className="mono" style={{ fontSize: 10, color: 'var(--faint)' }}>{item.estimateMin}m</span>}
       </div>

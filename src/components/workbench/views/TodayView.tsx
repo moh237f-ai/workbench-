@@ -3,21 +3,93 @@
 
 import React from 'react';
 import {
-  Play, Plus, CalendarDays, Target, Clock, Repeat, BarChart3, Zap, Sparkles,
+  Play, Plus, CalendarDays, Target, Clock, Repeat, BarChart3, Zap, Sparkles, BookOpen,
 } from 'lucide-react';
-import { useWB, wbChildren, wbIsBlocked, wbPickNextAction, wbPlannedItems, wbPlannedMinutes, wbReadyItems } from '@/lib/workbench/store';
+import {
+  useWB, wbChildren, wbFileProgress, wbFileReadPages, wbIsBlocked, wbPickNextAction, wbPlannedItems, wbPlannedMinutes, wbReadyItems,
+} from '@/lib/workbench/store';
 import {
   computeProgress, daysUntil, deadlineStatus, entriesInRange, fmtDateNice, fmtDuration, isoDate, startOfWeek, todayStr,
 } from '@/lib/workbench/helpers';
+import { useFileCover } from '@/lib/workbench/covers';
 import { dateToShamsi, formatShamsi } from '@/lib/workbench/shamsi';
 import { Btn, toast, useNow } from '../ui/primitives';
 import { useViewActions } from './viewCtx';
 import { TodayClock } from '../TodayClock';
 
+function ContinueReading() {
+  const files = useWB((s) => s.files)
+    .filter((f) => !f.archived)
+    .filter((f) => {
+      const pct = wbFileProgress(f);
+      return pct > 0 && pct < 100;
+    })
+    .sort((a, b) => (b.lastReadAt || '').localeCompare(a.lastReadAt || ''))
+    .slice(0, 3);
+  if (!files.length) return null;
+  return (
+    <>
+      <div className="section-title">Continue reading</div>
+      <div className="card" style={{ display: 'flex', gap: 12, overflowX: 'auto', paddingBottom: 4, marginBottom: 18 }}>
+        {files.map((f) => (
+          <ReadingMiniCard key={f.id} fileId={f.id} />
+        ))}
+      </div>
+    </>
+  );
+}
+
+function ReadingMiniCard({ fileId }: { fileId: string }) {
+  const file = useWB((s) => s.files.find((f) => f.id === fileId));
+  const cover = useFileCover(file);
+  if (!file) return null;
+  const pct = wbFileProgress(file);
+  const pages = wbFileReadPages(file);
+  return (
+    <div style={{ display: 'flex', gap: 10, minWidth: 250, flex: '0 0 auto', alignItems: 'center' }}>
+      <button
+        onClick={() => window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: file.id }))}
+        aria-label={`Resume reading ${file.title}`}
+        title={`Resume ${file.title}`}
+        style={{
+          width: 58, height: 76, borderRadius: 8, overflow: 'hidden', flexShrink: 0,
+          border: '1px solid var(--hairline)', background: 'var(--surface-alt)', cursor: 'pointer', padding: 0,
+        }}
+      >
+        {cover ? (
+          <img src={cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <span style={{ display: 'grid', placeItems: 'center', height: '100%', color: 'var(--faint)' }}>
+            <BookOpen size={20} />
+          </span>
+        )}
+      </button>
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ fontSize: 13, fontWeight: 650, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {file.title}
+        </div>
+        <div className="mono" style={{ fontSize: 11, color: 'var(--muted2)', margin: '3px 0 6px' }}>
+          p.{file.currentPage} of {file.pageCount} · {pages} read
+        </div>
+        <div className="pbar sm" style={{ marginBottom: 8 }}>
+          <span style={{ width: `${pct}%`, background: 'var(--violet)' }} />
+        </div>
+        <Btn
+          size="sm"
+          onClick={() => window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: file.id }))}
+        >
+          <Play size={13} /> Resume
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
 export function TodayView() {
   const items = useWB((s) => s.items);
   const entries = useWB((s) => s.entries);
   const habits = useWB((s) => s.habits);
+  const files = useWB((s) => s.files);
   const activeTimer = useWB((s) => s.activeTimer);
   const capacity = useWB((s) => s.dailyCapacityMin);
   const startItemFocus = useWB((s) => s.startItemFocus);
@@ -40,6 +112,10 @@ export function TodayView() {
     .filter((i) => i.deadline && computeProgress(i, (id) => wbChildren(items, id)) < 100 && !['done', 'archived'].includes(i.status))
     .sort((a, b) => (a.deadline || '').localeCompare(b.deadline || ''))
     .slice(0, 5);
+  const fileDeadlines = files
+    .filter((f) => !f.archived && f.deadline && wbFileProgress(f) < 100)
+    .sort((a, b) => (a.deadline || '').localeCompare(b.deadline || ''))
+    .slice(0, 3);
   const todayEntries = entriesInRange(entries, today, today).slice(-6).reverse();
   const habitsDone = habits.filter((h) => h.log?.[today]).length;
   const shamsi = dateToShamsi(now);
@@ -153,6 +229,9 @@ export function TodayView() {
           <div className="stat-value">{habitsDone}/{habits.length}</div>
         </div>
       </div>
+
+      {/* Continue reading */}
+      <ContinueReading />
 
       {/* Plan + candidates */}
       <div className="screen-grid two-col">
@@ -277,7 +356,7 @@ export function TodayView() {
 
           <div className="section-title">Deadlines worth seeing</div>
           <div className="card">
-            {upcoming.length ? (
+            {upcoming.length || fileDeadlines.length ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
                 {upcoming.map((i) => {
                   const st = deadlineStatus(i, computeProgress(i, (id) => wbChildren(items, id)));
@@ -291,6 +370,32 @@ export function TodayView() {
                         <div className="goal-meta">{i.type === 'goal' ? 'Goal' : 'Task'}</div>
                       </div>
                       <span className={`chip chip-${st}`}>{label}</span>
+                    </div>
+                  );
+                })}
+                {fileDeadlines.map((f) => {
+                  const du = daysUntil(f.deadline!);
+                  const pct = wbFileProgress(f);
+                  const tone = du < 0 ? 'over' : du <= 3 ? 'soon' : 'ok';
+                  const label = du < 0 ? `${Math.abs(du)}d overdue` : du === 0 ? 'Due today' : `in ${du}d`;
+                  return (
+                    <div
+                      key={f.id}
+                      className="goal-card"
+                      style={{ gridTemplateColumns: 'auto minmax(0,1fr) auto', cursor: 'pointer' }}
+                      onClick={() => window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: f.id }))}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: f.id }));
+                      }}
+                    >
+                      <span className="goal-dot" style={{ background: 'var(--violet)' }} />
+                      <div className="goal-main">
+                        <div className="goal-name" style={{ fontSize: 13 }}>{f.title}</div>
+                        <div className="goal-meta">Reading · {pct}% · p.{f.currentPage}/{f.pageCount}</div>
+                      </div>
+                      <span className={`chip chip-${tone}`}>{label}</span>
                     </div>
                   );
                 })}

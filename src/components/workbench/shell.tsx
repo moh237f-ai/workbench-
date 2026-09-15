@@ -3,7 +3,8 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  Sun, LayoutGrid, Target, Clock, Repeat, BookOpen, CalendarDays, BarChart3,
+  Sun, LayoutGrid, Target, Clock, Repeat, BookOpen, Library as LibraryIcon, Waypoints,
+  CalendarDays, CalendarClock, BarChart3,
   Inbox, Focus, Play, Square, Download, Keyboard, Sparkles, Undo2, Redo2,
   Menu, Command, Zap, Palette, Timer as TimerIcon, CheckCircle2, X,
 } from 'lucide-react';
@@ -20,6 +21,9 @@ const NAV: { id: ViewId; label: string; icon: React.ReactNode; shortcut: string 
   { id: 'inbox', label: 'Inbox', icon: <Inbox />, shortcut: 'G I' },
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutGrid />, shortcut: 'G D' },
   { id: 'goals', label: 'Goals & Work', icon: <Target />, shortcut: 'G G' },
+  { id: 'library', label: 'Library', icon: <LibraryIcon />, shortcut: 'G B' },
+  { id: 'roadmap', label: 'Roadmaps', icon: <Waypoints />, shortcut: 'G M' },
+  { id: 'planner', label: 'Planner', icon: <CalendarClock />, shortcut: 'G P' },
   { id: 'log', label: 'Activity Log', icon: <Clock />, shortcut: 'G L' },
   { id: 'habits', label: 'Habits', icon: <Repeat />, shortcut: 'G H' },
   { id: 'journal', label: 'Journal', icon: <BookOpen />, shortcut: 'G J' },
@@ -294,6 +298,7 @@ export function StatusFooter() {
   const items = useWB((s) => s.items);
   const entries = useWB((s) => s.entries);
   const habits = useWB((s) => s.habits);
+  const files = useWB((s) => s.files);
   const activeTimer = useWB((s) => s.activeTimer);
   const stats = useWB((s) => s.stats);
   const now = useNow(!!activeTimer);
@@ -311,8 +316,12 @@ export function StatusFooter() {
       <span className="foot-item">
         <Zap size={13} />
         {activeTimer ? (
-          <span className="mono" style={{ color: 'var(--pine)', fontWeight: 700 }}>
-            {activeTimer.pomodoro ? (activeTimer.pomodoro.phase === 'work' ? 'Focus' : 'Break') : 'Timer'} · {fmtClock(timerSecs)}
+          <span className="mono" style={{ color: activeTimer.fileId ? 'var(--violet)' : 'var(--pine)', fontWeight: 700 }}>
+            {activeTimer.fileId
+              ? 'Reading'
+              : activeTimer.pomodoro
+                ? activeTimer.pomodoro.phase === 'work' ? 'Focus' : 'Break'
+                : 'Timer'} · {fmtClock(timerSecs)}
           </span>
         ) : (
           <span>Ready</span>
@@ -331,10 +340,20 @@ export function StatusFooter() {
         {habitsDone}/{habits.length} habits
       </span>
       <span className="foot-spacer" />
-      <span className="foot-item" title="Total focus sessions and minutes tracked">
+      <span className="foot-item" title="PDF files in your library">
+        <BookOpen />
+        {files.filter((f) => !f.archived).length} file{files.filter((f) => !f.archived).length === 1 ? '' : 's'}
+      </span>
+      <span className="foot-item" title="Total focus sessions, minutes and reading time tracked">
         <Focus />
         {stats.focusSessions} sessions · {fmtDuration(stats.focusMinutes)}
       </span>
+      {stats.readingMinutes > 0 && (
+        <span className="foot-item" title="Total reading time and pages read">
+          <LibraryIcon />
+          {fmtDuration(stats.readingMinutes)} read · {stats.pagesRead}p
+        </span>
+      )}
       <span className="foot-item" style={{ color: 'var(--faint)' }}>
         Workbench Aurora · local-first
       </span>

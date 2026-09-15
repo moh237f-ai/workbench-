@@ -2,8 +2,8 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
-import { Plus, Trash2, Check, Link2, Tag } from 'lucide-react';
-import { useWB, wbCanDependOn, wbChildren, wbIsBlocked } from '@/lib/workbench/store';
+import { Plus, Trash2, Check, Link2, Tag, BookOpen, X as XIcon } from 'lucide-react';
+import { useWB, wbCanDependOn, wbChildren, wbFileProgress, wbFileReadPages, wbIsBlocked } from '@/lib/workbench/store';
 import { computeProgress, daysUntil, deadlineStatus } from '@/lib/workbench/helpers';
 import { SWATCHES } from '@/lib/workbench/types';
 import type { ItemStatus, ItemType, Priority } from '@/lib/workbench/types';
@@ -165,12 +165,14 @@ export function ItemDetailModal({
 }) {
   const items = useWB((s) => s.items);
   const labels = useWB((s) => s.labels);
+  const files = useWB((s) => s.files);
   const updateItem = useWB((s) => s.updateItem);
   const deleteItemCascade = useWB((s) => s.deleteItemCascade);
   const toggleItemLabel = useWB((s) => s.toggleItemLabel);
   const setItemStatus = useWB((s) => s.setItemStatus);
   const startItemFocus = useWB((s) => s.startItemFocus);
   const setFocusOpen = useWB((s) => s.setFocusOpen);
+  const toggleItemFile = useWB((s) => s.toggleItemFile);
 
   const item = items.find((i) => i.id === itemId) || null;
 
@@ -186,12 +188,26 @@ export function ItemDetailModal({
   const [color, setColor] = useState<string | null>(item?.color ?? null);
   const [checklistText, setChecklistText] = useState('');
   const [dependsOn, setDependsOn] = useState<string[]>([...(item?.dependsOn || [])]);
+  const [linkPickerOpen, setLinkPickerOpen] = useState(false);
+  const [fileSearch, setFileSearch] = useState('');
 
   const children = useMemo(() => (item ? wbChildren(items, item.id) : []), [items, item]);
   const hasChildren = children.length > 0;
   const pct = item ? computeProgress(item, (id) => wbChildren(items, id)) : 0;
   const itemLabels = item ? labels.filter((l) => l.itemIds.includes(item.id)) : [];
   const blocked = item ? wbIsBlocked(items, item) : false;
+  const linkedFiles = item
+    ? files.filter((f) => (item.fileIds || []).includes(f.id) && !f.archived)
+    : [];
+  const linkableFiles = item
+    ? files.filter(
+        (f) =>
+          !f.archived &&
+          !(item.fileIds || []).includes(f.id) &&
+          (f.title.toLowerCase().includes(fileSearch.trim().toLowerCase()) ||
+            f.fileName.toLowerCase().includes(fileSearch.trim().toLowerCase()))
+      )
+    : [];
 
   if (!item) return null;
 
@@ -442,6 +458,118 @@ export function ItemDetailModal({
           <Btn size="sm" variant="ghost" onClick={onOpenLabels}>
             <Tag size={13} /> {itemLabels.length ? 'Manage' : 'Add labels'}
           </Btn>
+        </div>
+      </div>
+
+      <div className="field">
+        <label>
+          <BookOpen size={12} style={{ display: 'inline', marginRight: 4, verticalAlign: -1 }} />
+          Linked files {linkedFiles.length > 0 && `· ${linkedFiles.length}`}
+        </label>
+        {linkedFiles.length > 0 && (
+          <div className="checkbox-list" style={{ marginBottom: 8 }}>
+            {linkedFiles.map((f) => {
+              const fp = wbFileProgress(f);
+              const pages = wbFileReadPages(f);
+              return (
+                <div key={f.id} className="checkbox-row" style={{ alignItems: 'center' }}>
+                  <BookOpen size={14} style={{ color: 'var(--violet)', flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {f.title}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3 }}>
+                      <div className="pbar sm" style={{ flex: 1 }}>
+                        <span style={{ width: `${fp}%`, background: 'var(--violet)' }} />
+                      </div>
+                      <span className="mono" style={{ fontSize: 10, color: 'var(--muted2)', flexShrink: 0 }}>
+                        {pages}/{f.pageCount}p · {fp}%
+                      </span>
+                    </div>
+                  </div>
+                  <Btn
+                    size="sm"
+                    onClick={() => {
+                      onClose();
+                      window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: f.id }));
+                    }}
+                    title="Open in the reader"
+                  >
+                    Read
+                  </Btn>
+                  <button
+                    className="icon-btn icon-btn-sm icon-btn-danger"
+                    title="Unlink file"
+                    onClick={() => {
+                      toggleItemFile(item.id, f.id);
+                      toast('File unlinked', f.title);
+                    }}
+                  >
+                    <XIcon size={13} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {linkPickerOpen ? (
+          <div className="checkbox-list">
+            <input
+              type="text"
+              placeholder="Search library files…"
+              value={fileSearch}
+              autoFocus
+              onChange={(e) => setFileSearch(e.target.value)}
+              style={{
+                width: '100%', padding: '8px 12px', border: '1px solid var(--hairline)',
+                borderRadius: 'var(--radius-wb-sm)', background: 'var(--surface-solid)', color: 'var(--ink)',
+                marginBottom: 6,
+              }}
+            />
+            <div style={{ maxHeight: 168, overflowY: 'auto' }}>
+              {linkableFiles.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  className="checkbox-row"
+                  style={{
+                    width: '100%', background: 'none', border: 'none', cursor: 'pointer',
+                    textAlign: 'left', fontFamily: 'inherit',
+                  }}
+                  onClick={() => {
+                    toggleItemFile(item.id, f.id);
+                    setFileSearch('');
+                    toast('File linked', f.title);
+                  }}
+                >
+                  <BookOpen size={14} style={{ color: 'var(--violet)', flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {f.title}
+                  </span>
+                  <span className="mono" style={{ fontSize: 10, color: 'var(--faint)' }}>
+                    {f.pageCount}p · p.{f.currentPage}
+                  </span>
+                </button>
+              ))}
+              {!linkableFiles.length && (
+                <div className="field-help">
+                  {files.length
+                    ? 'No unlinked files match — add PDFs in the Library first.'
+                    : 'Your library is empty — add PDFs in the Library view first.'}
+                </div>
+              )}
+            </div>
+            <Btn size="sm" variant="ghost" style={{ marginTop: 6 }} onClick={() => setLinkPickerOpen(false)}>
+              Done
+            </Btn>
+          </div>
+        ) : (
+          <Btn size="sm" variant="ghost" onClick={() => setLinkPickerOpen(true)}>
+            <Link2 size={13} /> {linkedFiles.length ? 'Link another file' : 'Link a library file'}
+          </Btn>
+        )}
+        <div className="field-help" style={{ marginTop: 6 }}>
+          One file can serve many goals — reading progress stays with the file.
         </div>
       </div>
 

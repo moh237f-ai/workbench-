@@ -24,6 +24,11 @@ import { JournalView } from './views/JournalView';
 import { CalendarView, CalendarHeaderActions } from './views/CalendarView';
 import { ReportsView, ReportsHeaderActions } from './views/ReportsView';
 import { InboxView, InboxHeaderActions } from './views/InboxView';
+import { LibraryView, LibraryHeaderActions } from './library/LibraryView';
+import { FileFormModal } from './library/FileFormModal';
+import { RoadmapView, RoadmapHeaderActions } from './roadmap/RoadmapView';
+import { PlannerView, PlannerHeaderActions } from './planner/PlannerView';
+import { ReaderOverlay } from './reader/ReaderOverlay';
 
 /* ---------- view registry ---------- */
 
@@ -32,6 +37,9 @@ const HEADERS: Record<ViewId, [string, string]> = {
   inbox: ['Inbox', 'Capture first. Clarify when you are ready.'],
   dashboard: ['Dashboard', 'Where things stand right now.'],
   goals: ['Goals & Work', 'Plan the work, break it down, watch it move.'],
+  library: ['Library', 'Your PDF shelf — covers, deadlines, reading progress.'],
+  roadmap: ['Roadmaps', 'Design the master plan — connect goals, tasks and files.'],
+  planner: ['Planner', 'Shape your days and weeks before they happen.'],
   log: ['Activity Log', 'Log what you actually did, and tag it.'],
   habits: ['Habits', 'Small reps, compounding returns.'],
   journal: ['Journal', 'Daily notes, mood, and reflections.'],
@@ -45,6 +53,9 @@ function ViewBody({ view }: { view: ViewId }) {
     case 'inbox': return <InboxView />;
     case 'dashboard': return <DashboardView />;
     case 'goals': return <GoalsView />;
+    case 'library': return <LibraryView />;
+    case 'roadmap': return <RoadmapView />;
+    case 'planner': return <PlannerView />;
     case 'log': return <LogView />;
     case 'habits': return <HabitsView />;
     case 'journal': return <JournalView />;
@@ -60,6 +71,9 @@ function ViewHeaderActions({ view }: { view: ViewId }) {
     case 'calendar': return <CalendarHeaderActions />;
     case 'reports': return <ReportsHeaderActions />;
     case 'inbox': return <InboxHeaderActions />;
+    case 'library': return <LibraryHeaderActions />;
+    case 'roadmap': return <RoadmapHeaderActions />;
+    case 'planner': return <PlannerHeaderActions />;
     default: return null;
   }
 }
@@ -90,6 +104,8 @@ export default function WorkbenchApp() {
   const [mDayPlanner, setMDayPlanner] = useState<string | null>(null);
   const [mHabitForm, setMHabitForm] = useState<{ id: string | null } | null>(null);
   const [mPalette, setMPalette] = useState(false);
+  const [mReader, setMReader] = useState<string | null>(null);
+  const [mFileForm, setMFileForm] = useState<string | null>(null);
 
   /* hydrate persisted state after mount (avoids SSR mismatch) */
   useEffect(() => {
@@ -112,6 +128,26 @@ export default function WorkbenchApp() {
     };
     window.addEventListener('wb-open-item', handler);
     return () => window.removeEventListener('wb-open-item', handler);
+  }, []);
+
+  /* open the PDF reader overlay (library / palette / planner / dashboard / roadmap) */
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (id) setMReader(id);
+    };
+    window.addEventListener('wb-open-reader', handler);
+    return () => window.removeEventListener('wb-open-reader', handler);
+  }, []);
+
+  /* open the file edit modal (library cards) */
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (id) setMFileForm(id);
+    };
+    window.addEventListener('wb-open-file-form', handler);
+    return () => window.removeEventListener('wb-open-file-form', handler);
   }, []);
 
   /* keyboard shortcuts */
@@ -195,6 +231,7 @@ export default function WorkbenchApp() {
         const map: Record<string, ViewId> = {
           t: 'today', i: 'inbox', d: 'dashboard', g: 'goals', l: 'log',
           h: 'habits', j: 'journal', c: 'calendar', r: 'reports',
+          b: 'library', m: 'roadmap', p: 'planner',
         };
         if (map[key]) {
           e.preventDefault();
@@ -243,7 +280,7 @@ export default function WorkbenchApp() {
             <p className="sub">{subtitle}</p>
             <div className="header-actions">
               <ViewHeaderActions view={view} />
-              {view !== 'goals' && view !== 'inbox' && (
+              {view !== 'goals' && view !== 'inbox' && view !== 'library' && view !== 'roadmap' && view !== 'planner' && (
                 <>
                   <Btn size="sm" variant="primary" onClick={() => setMCapture(true)}>
                     <Sparkles size={14} /> Capture
@@ -307,6 +344,12 @@ export default function WorkbenchApp() {
         )}
         {mHabitForm && (
           <HabitFormModal habitId={mHabitForm.id} onClose={() => setMHabitForm(null)} />
+        )}
+        {mReader && (
+          <ReaderOverlay fileId={mReader} onClose={() => setMReader(null)} />
+        )}
+        {mFileForm && (
+          <FileFormModal fileId={mFileForm} onClose={() => setMFileForm(null)} />
         )}
         <CommandPalette
           open={mPalette}

@@ -1,0 +1,574 @@
+/* ==================== Library (PDF shelf) — lib-* custom classes ====================
+   Design tokens only (var(--…)); #fff is allowed solely as the PDF cover backdrop. */
+
+/* ---------- toolbar ---------- */
+
+.lib-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.lib-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted2);
+}
+.lib-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--muted2);
+}
+.lib-sort select {
+  min-height: 34px;
+  padding: 5px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-solid);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.lib-sort select:hover {
+  border-color: color-mix(in srgb, var(--pine) 40%, var(--hairline));
+}
+.lib-sort select:focus-visible {
+  outline: none;
+  border-color: var(--pine);
+  box-shadow: 0 0 0 3px var(--pine-light);
+}
+
+/* ---------- grid + drop zone ---------- */
+
+.lib-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+  gap: 14px;
+}
+.lib-dropwrap {
+  border-radius: var(--radius-wb);
+}
+.lib-dropwrap.drop .lib-grid,
+.lib-dropwrap.drop .empty-state {
+  outline: 2px dashed color-mix(in srgb, var(--pine) 60%, transparent);
+  outline-offset: 8px;
+  border-radius: var(--radius-wb);
+}
+.lib-drop-hint {
+  margin-top: 10px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+/* ---------- file card ---------- */
+
+.lib-card {
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-solid) 90%, transparent), var(--surface));
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-wb);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+  transition: transform 0.2s var(--ease), box-shadow 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.lib-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: color-mix(in srgb, var(--pine) 30%, var(--hairline));
+}
+.lib-card.archived {
+  opacity: 0.72;
+}
+.lib-card.archived .lib-cover-img {
+  filter: grayscale(0.7);
+}
+.lib-card.linking {
+  border-color: color-mix(in srgb, var(--violet) 42%, var(--hairline));
+}
+
+/* cover area (white PDF backdrop) */
+.lib-cover {
+  position: relative;
+  display: block;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  background: #fff;
+  border-bottom: 1px solid var(--hairline);
+  cursor: pointer;
+  overflow: hidden;
+}
+.lib-cover:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: -3px;
+}
+.lib-cover-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.lib-cover-skel {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    100deg,
+    color-mix(in srgb, var(--ink) 4%, transparent) 40%,
+    color-mix(in srgb, var(--ink) 8%, transparent) 50%,
+    color-mix(in srgb, var(--ink) 4%, transparent) 60%
+  );
+  background-size: 220% 100%;
+  animation: libShimmer 1.5s ease-in-out infinite;
+}
+@keyframes libShimmer {
+  from { background-position: 130% 0; }
+  to { background-position: -90% 0; }
+}
+.lib-cover-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.lib-cover-fallback svg {
+  width: 34px;
+  height: 34px;
+  opacity: 0.5;
+}
+.lib-page-badge {
+  position: absolute;
+  right: 7px;
+  bottom: 7px;
+  padding: 3px 7px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--surface-solid) 85%, transparent);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid var(--hairline);
+  color: var(--muted2);
+  pointer-events: none;
+}
+
+/* card body */
+.lib-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 13px 13px;
+}
+.lib-title {
+  font-family: var(--font-sora), sans-serif;
+  font-weight: 650;
+  font-size: 13.5px;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  cursor: pointer;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.7em;
+  border-radius: 6px;
+}
+.lib-title:hover {
+  color: var(--pine);
+}
+.lib-title:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+.lib-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.lib-chips .chip {
+  font-size: 10.5px;
+}
+.lib-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.lib-progress .pbar {
+  flex: 1;
+  min-width: 0;
+}
+.lib-progress-num {
+  font-size: 10.5px;
+  color: var(--muted2);
+  white-space: nowrap;
+}
+.lib-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px 8px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted2);
+}
+.lib-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted2);
+  white-space: nowrap;
+}
+.lib-time svg {
+  width: 11px;
+  height: 11px;
+  color: var(--faint);
+}
+.lib-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: var(--surface-alt);
+  border: 1px solid var(--hairline);
+  color: var(--muted2);
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.lib-tag svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* hover actions row — fades in on pointer devices, always visible on touch */
+.lib-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+.lib-actions .btn {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+@media (hover: hover) and (pointer: fine) {
+  .lib-actions {
+    opacity: 0;
+    transform: translateY(3px);
+    transition: opacity 0.18s var(--ease), transform 0.18s var(--ease);
+  }
+  .lib-card:hover .lib-actions,
+  .lib-card:focus-within .lib-actions,
+  .lib-card.linking .lib-actions {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (hover: none), (max-width: 640px) {
+  .lib-actions .btn {
+    min-height: 36px;
+  }
+}
+
+/* ---------- inline item linker ---------- */
+
+.lib-linkpicker {
+  border: 1px solid color-mix(in srgb, var(--violet) 35%, var(--hairline));
+  border-radius: var(--radius-wb-sm);
+  background: var(--surface-solid);
+  overflow: hidden;
+}
+.lib-link-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--hairline);
+  color: var(--muted2);
+}
+.lib-link-head input {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.lib-link-head input:focus-visible {
+  outline: none;
+}
+.lib-link-list {
+  max-height: 210px;
+  overflow-y: auto;
+}
+.lib-link-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 0.12s var(--ease);
+}
+.lib-link-row:hover {
+  background: var(--surface-alt);
+}
+.lib-link-row:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: -2px;
+}
+.lib-link-row.linked {
+  background: var(--pine-light);
+}
+.lib-link-check {
+  width: 16px;
+  height: 16px;
+  display: grid;
+  place-items: center;
+  color: var(--pine);
+  flex-shrink: 0;
+}
+.lib-link-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-link-type {
+  font-size: 9.5px;
+  color: var(--faint);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex-shrink: 0;
+}
+.lib-link-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* ---------- importing chip + spinner ---------- */
+
+.lib-importing {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 99px;
+  background: var(--pine-light);
+  color: var(--pine);
+  border: 1px solid color-mix(in srgb, var(--pine) 25%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.lib-spin {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 2px solid color-mix(in srgb, var(--pine) 28%, transparent);
+  border-top-color: var(--pine);
+  animation: libSpin 0.7s linear infinite;
+}
+@keyframes libSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------- file form modal ---------- */
+
+.lib-file-name {
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 11px;
+  color: var(--faint);
+  margin: -8px 0 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-form-grid {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.lib-cover-preview {
+  position: relative;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-wb-sm);
+  border: 1px solid var(--hairline);
+  background: #fff;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+.lib-cover-preview img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.lib-cover-controls {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+
+/* reading insights */
+.lib-insights-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  gap: 10px;
+  margin: 18px 0 4px;
+}
+.lib-insight {
+  background: var(--surface-alt);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-wb-sm);
+  padding: 10px 12px;
+}
+.lib-insight-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 750;
+  color: var(--faint);
+  margin-bottom: 5px;
+}
+.lib-insight-value {
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+/* page time map */
+.lib-pmap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  max-height: 120px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-wb-sm);
+  background: var(--surface-alt);
+}
+.lib-pmap-cell {
+  width: 10px;
+  height: 10px;
+  border-radius: 2.5px;
+  flex-shrink: 0;
+}
+.lib-pmap-cell.manual {
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--ink) 40%, transparent);
+}
+.lib-pmap-legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+}
+.lib-pmap-legend-label {
+  font-size: 10.5px;
+  color: var(--faint);
+  margin-right: 10px;
+}
+
+/* recent sessions */
+.lib-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.lib-session-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  color: var(--muted2);
+  background: var(--surface-alt);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-wb-sm);
+}
+.lib-session-date {
+  font-weight: 650;
+  color: var(--ink);
+}
+.lib-session-row .mono {
+  font-size: 12px;
+}
+.lib-dot {
+  color: var(--faint);
+}
+.lib-session-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--faint);
+  font-size: 12.5px;
+  border: 1px dashed var(--hairline);
+  border-radius: var(--radius-wb-sm);
+}
+
+/* slim scrollbars for in-card / in-modal scroll areas */
+.lib-link-list::-webkit-scrollbar,
+.lib-pmap::-webkit-scrollbar {
+  width: 7px;
+}
+.lib-link-list::-webkit-scrollbar-thumb,
+.lib-pmap::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted2) 32%, transparent);
+  border-radius: 99px;
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 520px) {
+  .lib-grid {
+    grid-template-columns: 1fr;
+  }
+  .lib-filter-seg {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 620px) {
+  .lib-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .lib-cover-preview {
+    max-width: 230px;
+  }
+}

@@ -1023,7 +1023,7 @@ input[type='range'] { accent-color: var(--pine); width: 100%; }
   align-items: flex-start;
   justify-content: center;
   padding: 6vh 18px;
-  z-index: 120;
+  z-index: 940; /* above the reader overlay (900) so item detail opens over it */
   overflow-y: auto;
   animation: overlayIn 0.2s ease-out;
 }
@@ -1051,7 +1051,7 @@ input[type='range'] { accent-color: var(--pine); width: 100%; }
   position: fixed;
   bottom: 58px;
   right: 22px;
-  z-index: 300;
+  z-index: 960;
   display: flex;
   flex-direction: column;
   gap: 8px;

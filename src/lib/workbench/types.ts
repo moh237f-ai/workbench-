@@ -7,6 +7,9 @@ export type ViewId =
   | 'inbox'
   | 'dashboard'
   | 'goals'
+  | 'library'
+  | 'roadmap'
+  | 'planner'
   | 'log'
   | 'habits'
   | 'journal'
@@ -38,6 +41,7 @@ export interface Item {
   estimateMin: number | null;
   nextAction: string;
   dependsOn: string[]; // item ids this item waits on
+  fileIds: string[]; // library files linked to this item (many-to-many)
   plannedStart: string | null; // yyyy-mm-ddThh:mm timebox start
   plannedEnd: string | null; // yyyy-mm-ddThh:mm timebox end
   startDate: string | null; // planned day (capacity planning)
@@ -95,8 +99,88 @@ export interface ActiveTimer {
   startedAt: string; // ISO timestamp
   labelIds: string[];
   itemIds: string[];
+  fileId: string | null; // library file this session is reading (focus-read)
   note: string;
   pomodoro: Pomodoro | null;
+}
+
+/* ==================== v4: Library (PDF files) ==================== */
+
+export type FileCoverMode = 'page' | 'custom';
+
+export interface ResourceFile {
+  id: string;
+  title: string;
+  fileName: string;
+  size: number; // bytes
+  pageCount: number;
+  addedAt: string; // ISO
+  deadline: string | null; // yyyy-mm-dd "dead time"
+  coverMode: FileCoverMode; // 'page' renders coverPage, 'custom' uses uploaded image (IDB)
+  coverPage: number; // 1-based page used as cover when coverMode === 'page'
+  color: string | null;
+  tags: string[];
+  notes: string;
+  currentPage: number; // 1-based reading position
+  pageSeconds: Record<string, number>; // page number -> accumulated seconds
+  readPages: string[]; // manually marked read page ids
+  lastReadAt: string | null;
+  archived: boolean;
+}
+
+export interface ReadingSession {
+  id: string;
+  fileId: string;
+  date: string; // yyyy-mm-dd
+  startedAt: string; // ISO
+  endedAt: string; // ISO
+  minutes: number;
+  pagesVisited: number;
+  pagesRead: number;
+  startPage: number;
+  endPage: number;
+}
+
+export interface FilePlanBlock {
+  id: string;
+  fileId: string;
+  date: string; // yyyy-mm-dd
+  startMin: number; // minutes from midnight
+  minutes: number;
+  done: boolean;
+}
+
+/* ==================== v4: Roadmaps ==================== */
+
+export type RoadmapNodeKind = 'goal' | 'task' | 'file' | 'milestone' | 'note';
+
+export interface RoadmapNode {
+  id: string;
+  kind: RoadmapNodeKind;
+  refId: string | null; // linked entity id (item id / file id)
+  label: string; // fallback title (mirrors entity when linked)
+  x: number;
+  y: number;
+  milestoneDate: string | null; // yyyy-mm-dd for milestones
+  note: string; // note text / extra context
+  done: boolean; // manual toggle for milestones
+}
+
+export interface RoadmapEdge {
+  id: string;
+  from: string; // node id
+  to: string; // node id
+  label: string; // e.g. "then", "needs"
+}
+
+export interface Roadmap {
+  id: string;
+  title: string;
+  description: string;
+  nodes: RoadmapNode[];
+  edges: RoadmapEdge[];
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type GraphView = 'tree' | 'kanban' | 'matrix';

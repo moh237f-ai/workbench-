@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useMemo } from 'react';
-import { ChevronLeft, ChevronRight, CalendarDays, Plus, Clock } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarDays, Plus, Clock, CalendarClock } from 'lucide-react';
 import { useWB, wbChildren, wbTimeboxedItems } from '@/lib/workbench/store';
 import { computeProgress, fmtDateNice, fmtDuration, todayStr } from '@/lib/workbench/helpers';
 import {
@@ -17,15 +17,21 @@ const GREG_WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export function CalendarHeaderActions() {
   const system = useWB((s) => s.calendarSystem);
   const setSystem = useWB((s) => s.setCalendarSystem);
+  const setView = useWB((s) => s.setView);
   return (
-    <Seg<CalendarSystem>
-      value={system}
-      onChange={setSystem}
-      options={[
-        { id: 'gregorian', label: 'Gregorian' },
-        { id: 'shamsi', label: 'شمسی' },
-      ]}
-    />
+    <>
+      <Seg<CalendarSystem>
+        value={system}
+        onChange={setSystem}
+        options={[
+          { id: 'gregorian', label: 'Gregorian' },
+          { id: 'shamsi', label: 'شمسی' },
+        ]}
+      />
+      <Btn size="sm" onClick={() => setView('planner')} title="Open the day / week planner">
+        <CalendarClock size={14} /> Planner
+      </Btn>
+    </>
   );
 }
 

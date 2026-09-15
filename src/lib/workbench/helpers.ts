@@ -77,6 +77,40 @@ export function timeDiffMin(a: string, b: string): number {
   return diff;
 }
 
+/* ---------- v4: planner time helpers ---------- */
+
+/** minutes-since-midnight → "HH:MM" */
+export function minToHHMM(min: number): string {
+  const m = ((Math.round(min) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+}
+
+/** "HH:MM" → minutes since midnight */
+export function hhmmToMin(s: string): number {
+  const [h, m] = s.split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+/** yyyy-mm-dd + minutes → "yyyy-mm-ddThh:mm" (timebox format) */
+export function dateTimeFromMin(date: string, min: number): string {
+  return `${date}T${minToHHMM(min)}`;
+}
+
+/** "yyyy-mm-ddThh:mm" → minutes since midnight */
+export function plannedStartToMin(plannedStart: string): number {
+  return hhmmToMin(plannedStart.slice(11, 16));
+}
+
+export function addDaysStr(dateStr: string, days: number): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + days);
+  return isoDate(d);
+}
+
+export function startOfWeekStr(d: Date = new Date()): string {
+  return isoDate(startOfWeek(d));
+}
+
 export function colorForIndex(i: number, swatches: string[]): string {
   return swatches[i % swatches.length];
 }
@@ -116,7 +150,7 @@ export function deadlineStatus(
 /* ---------- Focus timing (pause-aware) ---------- */
 
 export function getFocusTiming(
-  activeTimer: { startedAt: string; pomodoro: PomodoroLike } | null,
+  activeTimer: { startedAt: string; pomodoro: PomodoroLike | null } | null,
   nowMs: number
 ): FocusTiming {
   let phaseLabel = 'Free';

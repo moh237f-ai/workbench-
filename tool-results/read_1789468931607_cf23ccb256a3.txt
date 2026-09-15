@@ -1,0 +1,705 @@
+     1→/* ==================== Workbench Aurora — Roadmap Canvas ====================
+     2→   Internal pan/zoom SVG canvas used by RoadmapView:
+     3→   - ONE root <svg>; edges render first, then foreignObject node cards
+     4→   - pan by dragging the dotted background, cursor-anchored wheel zoom (0.35–2.2)
+     5→   - node drag with live override + 4px snap, link mode, bezier edges + labels
+     6→   - imperative handle: fitView / centerNode / zoomBy / dropSpot
+     7→   Also exports the shared graph helpers (nodeLive, topoOrder, kind metadata). */
+     8→
+     9→'use client';
+    10→
+    11→import React, {
+    12→  forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+    13→} from 'react';
+    14→import { BookOpen, Flag, SquareCheck, StickyNote, Target } from 'lucide-react';
+    15→import type { LucideIcon } from 'lucide-react';
+    16→import {
+    17→  wbChildren, wbFileAvgSecPerPage, wbFileDeadlineStatus, wbFileProgress, wbFileReadPages, wbIsBlocked,
+    18→} from '@/lib/workbench/store';
+    19→import { clamp, computeProgress, daysUntil, deadlineStatus } from '@/lib/workbench/helpers';
+    20→import type {
+    21→  Item, ResourceFile, Roadmap, RoadmapEdge, RoadmapNode, RoadmapNodeKind,
+    22→} from '@/lib/workbench/types';
+    23→
+    24→/* ---------- constants & shared kind metadata ---------- */
+    25→
+    26→export const RM_NODE_W = 230;
+    27→export const RM_NODE_H = 92;
+    28→const ZOOM_MIN = 0.35;
+    29→const ZOOM_MAX = 2.2;
+    30→
+    31→export type RmSelection = { kind: 'node' | 'edge'; id: string };
+    32→
+    33→export const RM_KIND_ICON: Record<RoadmapNodeKind, LucideIcon> = {
+    34→  goal: Target,
+    35→  task: SquareCheck,
+    36→  file: BookOpen,
+    37→  milestone: Flag,
+    38→  note: StickyNote,
+    39→};
+    40→
+    41→export const RM_KIND_META: { kind: RoadmapNodeKind; label: string; hint: string; Icon: LucideIcon }[] = [
+    42→  { kind: 'goal', label: 'Goal', hint: 'live from Goals', Icon: Target },
+    43→  { kind: 'task', label: 'Task', hint: 'live from Work', Icon: SquareCheck },
+    44→  { kind: 'file', label: 'File', hint: 'live from Library', Icon: BookOpen },
+    45→  { kind: 'milestone', label: 'Milestone', hint: 'date + done', Icon: Flag },
+    46→  { kind: 'note', label: 'Note', hint: 'free text', Icon: StickyNote },
+    47→];
+    48→
+    49→const STATUS_LABEL: Record<RmNodeStatus, string> = {
+    50→  done: 'done',
+    51→  progress: 'active',
+    52→  blocked: 'blocked',
+    53→  todo: 'todo',
+    54→  none: '',
+    55→};
+    56→
+    57→/* ---------- live per-node data (mirrors linked entities) ---------- */
+    58→
+    59→export type RmNodeStatus = 'done' | 'progress' | 'todo' | 'blocked' | 'none';
+    60→
+    61→export interface RmNodeLive {
+    62→  title: string;
+    63→  missing: boolean; // linked entity was deleted
+    64→  status: RmNodeStatus;
+    65→  pct: number; // -1 = not applicable
+    66→  deadline: string | null;
+    67→  deadlineTone: 'done' | 'over' | 'soon' | 'ok' | null;
+    68→  estMin: number;
+    69→  done: boolean;
+    70→  pagesRead: number;
+    71→  pagesTotal: number;
+    72→}
+    73→
+    74→export function nodeLive(node: RoadmapNode, items: Item[], files: ResourceFile[]): RmNodeLive {
+    75→  const base: RmNodeLive = {
+    76→    title: node.label,
+    77→    missing: false,
+    78→    status: 'todo',
+    79→    pct: -1,
+    80→    deadline: null,
+    81→    deadlineTone: null,
+    82→    estMin: 0,
+    83→    done: false,
+    84→    pagesRead: 0,
+    85→    pagesTotal: 0,
+    86→  };
+    87→
+    88→  if (node.kind === 'goal' || node.kind === 'task') {
+    89→    const item = items.find((i) => i.id === node.refId);
+    90→    if (!item) return { ...base, missing: true, title: node.label || 'Deleted item' };
+    91→    const pct = computeProgress(item, (id) => wbChildren(items, id));
+    92→    const blocked = wbIsBlocked(items, item);
+    93→    const done = item.status === 'done' || (pct >= 100 && item.status !== 'inbox');
+    94→    const status: RmNodeStatus = done
+    95→      ? 'done'
+    96→      : blocked || item.status === 'waiting'
+    97→        ? 'blocked'
+    98→        : item.status === 'in_progress'
+    99→          ? 'progress'
+   100→          : 'todo';
+   101→    return {
+   102→      ...base,
+   103→      title: item.title,
+   104→      status,
+   105→      pct,
+   106→      deadline: item.deadline,
+   107→      deadlineTone: deadlineStatus(item, pct),
+   108→      estMin: item.estimateMin || 30,
+   109→      done,
+   110→    };
+   111→  }
+   112→
+   113→  if (node.kind === 'file') {
+   114→    const f = files.find((x) => x.id === node.refId);
+   115→    if (!f) return { ...base, missing: true, title: node.label || 'Deleted file' };
+   116→    const pct = wbFileProgress(f);
+   117→    const read = wbFileReadPages(f);
+   118→    const remaining = Math.max(0, f.pageCount - read);
+   119→    const avgSec = wbFileAvgSecPerPage(f);
+   120→    const perPageMin = avgSec > 0 ? Math.max(1, Math.round(avgSec / 60)) : 1; // fallback: 1 min/page
+   121→    const tone = wbFileDeadlineStatus(f);
+   122→    const status: RmNodeStatus = pct >= 100 ? 'done' : tone === 'over' ? 'blocked' : tone === 'soon' ? 'progress' : 'todo';
+   123→    return {
+   124→      ...base,
+   125→      title: f.title,
+   126→      status,
+   127→      pct,
+   128→      deadline: f.deadline,
+   129→      deadlineTone: tone,
+   130→      estMin: remaining * perPageMin,
+   131→      done: pct >= 100,
+   132→      pagesRead: read,
+   133→      pagesTotal: f.pageCount,
+   134→    };
+   135→  }
+   136→
+   137→  if (node.kind === 'milestone') {
+   138→    const done = node.done;
+   139→    let tone: RmNodeLive['deadlineTone'] = null;
+   140→    if (node.milestoneDate) {
+   141→      if (done) tone = 'done';
+   142→      else {
+   143→        const du = daysUntil(node.milestoneDate);
+   144→        tone = du < 0 ? 'over' : du <= 3 ? 'soon' : 'ok';
+   145→      }
+   146→    }
+   147→    return {
+   148→      ...base,
+   149→      title: node.label || 'Milestone',
+   150→      status: done ? 'done' : 'todo',
+   151→      pct: done ? 100 : -1,
+   152→      deadline: node.milestoneDate,
+   153→      deadlineTone: tone,
+   154→      estMin: 0,
+   155→      done,
+   156→    };
+   157→  }
+   158→
+   159→  // note
+   160→  return { ...base, title: node.label || 'Note', status: 'none' };
+   161→}
+   162→
+   163→/* ---------- topological order (Kahn, cycle-safe) ---------- */
+   164→
+   165→export function topoOrder(nodes: RoadmapNode[], edges: RoadmapEdge[]): string[] {
+   166→  const ids = nodes.map((n) => n.id);
+   167→  if (!ids.length) return [];
+   168→  const idSet = new Set(ids);
+   169→  const indeg = new Map<string, number>();
+   170→  const adj = new Map<string, string[]>();
+   171→  ids.forEach((id) => {
+   172→    indeg.set(id, 0);
+   173→    adj.set(id, []);
+   174→  });
+   175→  edges.forEach((e) => {
+   176→    if (!idSet.has(e.from) || !idSet.has(e.to) || e.from === e.to) return;
+   177→    indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1);
+   178→    adj.get(e.from)!.push(e.to);
+   179→  });
+   180→
+   181→  const orderIndex = new Map(ids.map((id, i) => [id, i]));
+   182→  const ready: string[] = [];
+   183→  const pushReady = (id: string) => {
+   184→    ready.push(id);
+   185→    ready.sort((a, b) => (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0));
+   186→  };
+   187→  ids.forEach((id) => {
+   188→    if ((indeg.get(id) ?? 0) === 0) pushReady(id);
+   189→  });
+   190→
+   191→  const out: string[] = [];
+   192→  const emitted = new Set<string>();
+   193→  while (ready.length) {
+   194→    const id = ready.shift()!;
+   195→    out.push(id);
+   196→    emitted.add(id);
+   197→    for (const t of adj.get(id) ?? []) {
+   198→      const d = (indeg.get(t) ?? 0) - 1;
+   199→      indeg.set(t, d);
+   200→      if (d === 0) pushReady(t);
+   201→    }
+   202→  }
+   203→
+   204→  // cycle remains → append leftover nodes by x-position (never crash)
+   205→  if (out.length < ids.length) {
+   206→    const byId = new Map(nodes.map((n) => [n.id, n]));
+   207→    const rest = ids.filter((id) => !emitted.has(id));
+   208→    rest.sort((a, b) => (byId.get(a)?.x ?? 0) - (byId.get(b)?.x ?? 0));
+   209→    out.push(...rest);
+   210→  }
+   211→  return out;
+   212→}
+   213→
+   214→/* ---------- canvas component ---------- */
+   215→
+   216→interface Viewport { x: number; y: number; zoom: number }
+   217→
+   218→export interface RoadmapCanvasHandle {
+   219→  fitView: () => void;
+   220→  centerNode: (nodeId: string) => void;
+   221→  zoomBy: (factor: number) => void;
+   222→  /** free world-coord spot for a new node — staggered around the view center */
+   223→  dropSpot: () => { x: number; y: number };
+   224→}
+   225→
+   226→export interface RoadmapCanvasProps {
+   227→  roadmap: Roadmap;
+   228→  items: Item[];
+   229→  files: ResourceFile[];
+   230→  selection: RmSelection | null;
+   231→  onSelect: (sel: RmSelection | null) => void;
+   232→  linkMode: boolean;
+   233→  linkSource: string | null;
+   234→  onLinkSource: (id: string | null) => void;
+   235→  onLink: (from: string, to: string) => void;
+   236→  onMoveNode: (nodeId: string, x: number, y: number) => void;
+   237→  onToggleMilestone: (node: RoadmapNode) => void;
+   238→  onZoomChange?: (zoom: number) => void;
+   239→  fitKey: number; // bump to trigger a fit (e.g. after auto-layout)
+   240→}
+   241→
+   242→const snap = (v: number) => Math.round(v / 4) * 4;
+   243→const f = (n: number) => n.toFixed(1);
+   244→
+   245→const RoadmapCanvas = forwardRef<RoadmapCanvasHandle, RoadmapCanvasProps>(function RoadmapCanvas(props, ref) {
+   246→  const {
+   247→    roadmap, items, files, selection, onSelect, linkMode, linkSource, onLinkSource, onLink,
+   248→    onMoveNode, onToggleMilestone, onZoomChange, fitKey,
+   249→  } = props;
+   250→
+   251→  const wrapRef = useRef<HTMLDivElement>(null);
+   252→  const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
+   253→  const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+   254→  const [drag, setDrag] = useState<{ id: string; x: number; y: number } | null>(null);
+   255→  const [panning, setPanning] = useState(false);
+   256→
+   257→  /* latest-value refs (read inside imperative handle + native listeners) */
+   258→  const viewportRef = useRef(viewport);
+   259→  viewportRef.current = viewport;
+   260→  const sizeRef = useRef(size);
+   261→  sizeRef.current = size;
+   262→  const roadmapRef = useRef(roadmap);
+   263→  roadmapRef.current = roadmap;
+   264→  const onZoomChangeRef = useRef(onZoomChange);
+   265→  onZoomChangeRef.current = onZoomChange;
+   266→
+   267→  const dragInfoRef = useRef<{ id: string; px: number; py: number; ox: number; oy: number; moved: boolean } | null>(null);
+   268→  const panInfoRef = useRef<{ px: number; py: number; x: number; y: number } | null>(null);
+   269→  const didFitRef = useRef(false);
+   270→
+   271→  /* live data per node — recomputed when entities or nodes change */
+   272→  const liveById = useMemo(() => {
+   273→    const m = new Map<string, RmNodeLive>();
+   274→    roadmap.nodes.forEach((n) => m.set(n.id, nodeLive(n, items, files)));
+   275→    return m;
+   276→  }, [roadmap.nodes, items, files]);
+   277→
+   278→  const nodeById = useMemo(() => new Map(roadmap.nodes.map((n) => [n.id, n])), [roadmap.nodes]);
+   279→
+   280→  /* selected / dragging / link-source node renders last (on top) */
+   281→  const renderNodes = useMemo(() => {
+   282→    const topId = drag?.id ?? (selection?.kind === 'node' ? selection.id : null) ?? linkSource;
+   283→    const rest: RoadmapNode[] = [];
+   284→    const top: RoadmapNode[] = [];
+   285→    roadmap.nodes.forEach((n) => (n.id === topId ? top.push(n) : rest.push(n)));
+   286→    return [...rest, ...top];
+   287→  }, [roadmap.nodes, drag, selection, linkSource]);
+   288→
+   289→  const posOf = (n: RoadmapNode): { x: number; y: number } =>
+   290→    drag && drag.id === n.id ? { x: drag.x, y: drag.y } : { x: n.x, y: n.y };
+   291→
+   292→  /* ---------- measure ---------- */
+   293→  useEffect(() => {
+   294→    const el = wrapRef.current;
+   295→    if (!el) return;
+   296→    const ro = new ResizeObserver((entries) => {
+   297→      const cr = entries[0]?.contentRect;
+   298→      if (cr) setSize({ w: cr.width, h: cr.height });
+   299→    });
+   300→    ro.observe(el);
+   301→    return () => ro.disconnect();
+   302→  }, []);
+   303→
+   304→  /* ---------- zoom (wheel, cursor-anchored) ---------- */
+   305→  useEffect(() => {
+   306→    const el = wrapRef.current;
+   307→    if (!el) return;
+   308→    const onWheel = (e: WheelEvent) => {
+   309→      e.preventDefault();
+   310→      const rect = el.getBoundingClientRect();
+   311→      const mx = e.clientX - rect.left;
+   312→      const my = e.clientY - rect.top;
+   313→      setViewport((v) => {
+   314→        const nz = clamp(v.zoom * Math.exp(-e.deltaY * 0.0016), ZOOM_MIN, ZOOM_MAX);
+   315→        if (nz === v.zoom) return v;
+   316→        const wx = (mx - v.x) / v.zoom;
+   317→        const wy = (my - v.y) / v.zoom;
+   318→        return { x: mx - wx * nz, y: my - wy * nz, zoom: nz };
+   319→      });
+   320→    };
+   321→    el.addEventListener('wheel', onWheel, { passive: false });
+   322→    return () => el.removeEventListener('wheel', onWheel);
+   323→  }, []);
+   324→
+   325→  useEffect(() => {
+   326→    onZoomChangeRef.current?.(viewport.zoom);
+   327→  }, [viewport.zoom]);
+   328→
+   329→  /* ---------- imperative handle ---------- */
+   330→
+   331→  const fitView = useCallback(() => {
+   332→    const { w, h } = sizeRef.current;
+   333→    const nodes = roadmapRef.current.nodes;
+   334→    if (!nodes.length || !w || !h) {
+   335→      setViewport({ x: 0, y: 0, zoom: 1 });
+   336→      return;
+   337→    }
+   338→    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+   339→    nodes.forEach((n) => {
+   340→      minX = Math.min(minX, n.x);
+   341→      minY = Math.min(minY, n.y);
+   342→      maxX = Math.max(maxX, n.x + RM_NODE_W);
+   343→      maxY = Math.max(maxY, n.y + RM_NODE_H);
+   344→    });
+   345→    const bw = Math.max(1, maxX - minX);
+   346→    const bh = Math.max(1, maxY - minY);
+   347→    const zoom = clamp(Math.min((w - 90) / bw, (h - 90) / bh), ZOOM_MIN, 1.5);
+   348→    setViewport({
+   349→      x: (w - bw * zoom) / 2 - minX * zoom,
+   350→      y: (h - bh * zoom) / 2 - minY * zoom,
+   351→      zoom,
+   352→    });
+   353→  }, []);
+   354→
+   355→  const centerNode = useCallback((nodeId: string) => {
+   356→    const { w, h } = sizeRef.current;
+   357→    const n = roadmapRef.current.nodes.find((x) => x.id === nodeId);
+   358→    if (!n || !w || !h) return;
+   359→    setViewport((v) => ({
+   360→      x: w / 2 - (n.x + RM_NODE_W / 2) * v.zoom,
+   361→      y: h / 2 - (n.y + RM_NODE_H / 2) * v.zoom,
+   362→      zoom: v.zoom,
+   363→    }));
+   364→  }, []);
+   365→
+   366→  const zoomBy = useCallback((factor: number) => {
+   367→    const { w, h } = sizeRef.current;
+   368→    setViewport((v) => {
+   369→      const nz = clamp(v.zoom * factor, ZOOM_MIN, ZOOM_MAX);
+   370→      if (nz === v.zoom) return v;
+   371→      const wx = (w / 2 - v.x) / v.zoom;
+   372→      const wy = (h / 2 - v.y) / v.zoom;
+   373→      return { x: w / 2 - wx * nz, y: h / 2 - wy * nz, zoom: nz };
+   374→    });
+   375→  }, []);
+   376→
+   377→  const dropSpot = useCallback(() => {
+   378→    const { w, h } = sizeRef.current;
+   379→    const v = viewportRef.current;
+   380→    const n = roadmapRef.current.nodes.length;
+   381→    if (!w || !h) return { x: 80 + (n % 4) * 260, y: 80 + Math.floor(n / 4) * 140 };
+   382→    // stagger grid around the world coords of the current view center
+   383→    const cx = (w / 2 - v.x) / v.zoom;
+   384→    const cy = (h / 2 - v.y) / v.zoom;
+   385→    return {
+   386→      x: Math.round(cx + (n % 4) * 260 - RM_NODE_W / 2),
+   387→      y: Math.round(cy + Math.floor(n / 4) * 140 - RM_NODE_H / 2),
+   388→    };
+   389→  }, []);
+   390→
+   391→  useImperativeHandle(ref, () => ({ fitView, centerNode, zoomBy, dropSpot }), [fitView, centerNode, zoomBy, dropSpot]);
+   392→
+   393→  /* auto-fit once the canvas gets its first real size */
+   394→  useEffect(() => {
+   395→    if (didFitRef.current || !size.w || !size.h) return;
+   396→    didFitRef.current = true;
+   397→    if (roadmapRef.current.nodes.length > 0) fitView();
+   398→  }, [size.w, size.h, fitView]);
+   399→
+   400→  /* fit on demand (after auto-layout etc.) */
+   401→  useEffect(() => {
+   402→    if (fitKey > 0) fitView();
+   403→  }, [fitKey, fitView]);
+   404→
+   405→  /* ---------- background pan ---------- */
+   406→
+   407→  const onBgPointerDown = (e: React.PointerEvent<SVGRectElement>) => {
+   408→    if (e.pointerType === 'mouse' && e.button !== 0) return;
+   409→    e.preventDefault();
+   410→    const v = viewportRef.current;
+   411→    panInfoRef.current = { px: e.clientX, py: e.clientY, x: v.x, y: v.y };
+   412→    setPanning(true);
+   413→    e.currentTarget.setPointerCapture(e.pointerId);
+   414→    onLinkSource(null); // background cancels the link source
+   415→    onSelect(null); // background click clears the selection
+   416→  };
+   417→  const onBgPointerMove = (e: React.PointerEvent<SVGRectElement>) => {
+   418→    const p = panInfoRef.current;
+   419→    if (!p) return;
+   420→    setViewport((v) => ({ ...v, x: p.x + (e.clientX - p.px), y: p.y + (e.clientY - p.py) }));
+   421→  };
+   422→  const endPan = (e: React.PointerEvent<SVGRectElement>) => {
+   423→    panInfoRef.current = null;
+   424→    setPanning(false);
+   425→    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+   426→  };
+   427→
+   428→  /* ---------- node drag / select / link ---------- */
+   429→
+   430→  const onNodePointerDown = (e: React.PointerEvent<HTMLDivElement>, node: RoadmapNode) => {
+   431→    if (e.pointerType === 'mouse' && e.button !== 0) return;
+   432→    e.stopPropagation();
+   433→    e.preventDefault();
+   434→    if (linkMode) {
+   435→      // capture semantics — clicking never drags in link mode
+   436→      if (!linkSource) onLinkSource(node.id);
+   437→      else if (linkSource === node.id) onLinkSource(null);
+   438→      else onLink(linkSource, node.id);
+   439→      return;
+   440→    }
+   441→    dragInfoRef.current = { id: node.id, px: e.clientX, py: e.clientY, ox: node.x, oy: node.y, moved: false };
+   442→    e.currentTarget.setPointerCapture(e.pointerId);
+   443→  };
+   444→
+   445→  const onNodePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+   446→    const d = dragInfoRef.current;
+   447→    if (!d) return;
+   448→    const zoom = viewportRef.current.zoom;
+   449→    const dx = (e.clientX - d.px) / zoom;
+   450→    const dy = (e.clientY - d.py) / zoom;
+   451→    if (!d.moved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;
+   452→    d.moved = true;
+   453→    setDrag({ id: d.id, x: snap(d.ox + dx), y: snap(d.oy + dy) });
+   454→  };
+   455→
+   456→  const onNodePointerUp = (e: React.PointerEvent<HTMLDivElement>, node: RoadmapNode) => {
+   457→    const d = dragInfoRef.current;
+   458→    dragInfoRef.current = null;
+   459→    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+   460→    if (!d) return;
+   461→    if (d.moved) {
+   462→      const cur = drag && drag.id === d.id ? drag : { x: snap(d.ox), y: snap(d.oy) };
+   463→      onMoveNode(d.id, cur.x, cur.y);
+   464→      setDrag(null);
+   465→    } else {
+   466→      onSelect({ kind: 'node', id: node.id });
+   467→    }
+   468→  };
+   469→
+   470→  const onNodePointerCancel = () => {
+   471→    dragInfoRef.current = null;
+   472→    setDrag(null);
+   473→  };
+   474→
+   475→  const onNodeKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, node: RoadmapNode) => {
+   476→    if (e.key !== 'Enter' && e.key !== ' ') return;
+   477→    e.preventDefault();
+   478→    if (linkMode) {
+   479→      if (!linkSource) onLinkSource(node.id);
+   480→      else if (linkSource !== node.id) onLink(linkSource, node.id);
+   481→      return;
+   482→    }
+   483→    onSelect({ kind: 'node', id: node.id });
+   484→  };
+   485→
+   486→  /* ---------- render ---------- */
+   487→
+   488→  return (
+   489→    <div
+   490→      ref={wrapRef}
+   491→      className={`rm-canvas-wrap${panning ? ' is-panning' : ''}${linkMode ? ' linking' : ''}`}
+   492→    >
+   493→      <svg className="rm-canvas-svg" role="img" aria-label={`Roadmap canvas: ${roadmap.title}`}>
+   494→        <defs>
+   495→          <pattern
+   496→            id="rm-dots"
+   497→            width={24}
+   498→            height={24}
+   499→            patternUnits="userSpaceOnUse"
+   500→            patternTransform={`translate(${f(viewport.x)} ${f(viewport.y)}) scale(${viewport.zoom.toFixed(3)})`}
+   501→          >
+   502→            <circle cx={1.4} cy={1.4} r={1.4} className="rm-dot" />
+   503→          </pattern>
+   504→          <marker
+   505→            id="rm-arrow"
+   506→            viewBox="0 0 10 10"
+   507→            refX={8.5}
+   508→            refY={5}
+   509→            markerWidth={9}
+   510→            markerHeight={9}
+   511→            orient="auto"
+   512→            markerUnits="userSpaceOnUse"
+   513→          >
+   514→            <path d="M 0 1 L 9 5 L 0 9 z" className="rm-arrow" />
+   515→          </marker>
+   516→          <marker
+   517→            id="rm-arrow-sel"
+   518→            viewBox="0 0 10 10"
+   519→            refX={8.5}
+   520→            refY={5}
+   521→            markerWidth={9}
+   522→            markerHeight={9}
+   523→            orient="auto"
+   524→            markerUnits="userSpaceOnUse"
+   525→          >
+   526→            <path d="M 0 1 L 9 5 L 0 9 z" className="rm-arrow-sel" />
+   527→          </marker>
+   528→        </defs>
+   529→
+   530→        {/* pan surface (screen space, pattern follows pan/zoom) */}
+   531→        <rect
+   532→          className="rm-bg"
+   533→          width="100%"
+   534→          height="100%"
+   535→          fill="url(#rm-dots)"
+   536→          onPointerDown={onBgPointerDown}
+   537→          onPointerMove={onBgPointerMove}
+   538→          onPointerUp={endPan}
+   539→          onPointerCancel={endPan}
+   540→        />
+   541→
+   542→        <g transform={`translate(${f(viewport.x)} ${f(viewport.y)}) scale(${viewport.zoom.toFixed(3)})`}>
+   543→          {/* edges first */}
+   544→          {roadmap.edges.map((edge) => {
+   545→            const a = nodeById.get(edge.from);
+   546→            const b = nodeById.get(edge.to);
+   547→            if (!a || !b) return null;
+   548→            const pa = posOf(a);
+   549→            const pb = posOf(b);
+   550→            const x1 = pa.x + RM_NODE_W;
+   551→            const y1 = pa.y + RM_NODE_H / 2;
+   552→            const x2 = pb.x;
+   553→            const y2 = pb.y + RM_NODE_H / 2;
+   554→            const mx = (x1 + x2) / 2;
+   555→            const d = `M ${f(x1)} ${f(y1)} C ${f(mx)} ${f(y1)}, ${f(mx)} ${f(y2)}, ${f(x2)} ${f(y2)}`;
+   556→            const midX = (x1 + 6 * mx + x2) / 8;
+   557→            const midY = (y1 + y2) / 2;
+   558→            const selected = selection?.kind === 'edge' && selection.id === edge.id;
+   559→            return (
+   560→              <g key={edge.id}>
+   561→                <path
+   562→                  d={d}
+   563→                  className={`rm-edge${selected ? ' selected' : ''}`}
+   564→                  markerEnd={`url(#${selected ? 'rm-arrow-sel' : 'rm-arrow'})`}
+   565→                />
+   566→                {edge.label ? (
+   567→                  <text x={f(midX)} y={f(midY - 6)} className="rm-edge-label">
+   568→                    {edge.label}
+   569→                  </text>
+   570→                ) : null}
+   571→                {/* wide invisible hit target for easy clicking */}
+   572→                <path
+   573→                  d={d}
+   574→                  className="rm-edge-hit"
+   575→                  onPointerDown={(e) => e.stopPropagation()}
+   576→                  onClick={(e) => {
+   577→                    e.stopPropagation();
+   578→                    onSelect({ kind: 'edge', id: edge.id });
+   579→                  }}
+   580→                />
+   581→              </g>
+   582→            );
+   583→          })}
+   584→
+   585→          {/* nodes on top */}
+   586→          {renderNodes.map((node) => {
+   587→            const p = posOf(node);
+   588→            const live = liveById.get(node.id);
+   589→            const st = live?.status ?? 'todo';
+   590→            const selected = selection?.kind === 'node' && selection.id === node.id;
+   591→            const isSource = linkSource === node.id;
+   592→            const cls = [
+   593→              'rm-node',
+   594→              selected ? 'selected' : '',
+   595→              isSource ? 'linking-source' : '',
+   596→              drag?.id === node.id ? 'dragging' : '',
+   597→              live?.missing ? 'deleted-ref' : '',
+   598→            ]
+   599→              .filter(Boolean)
+   600→              .join(' ');
+   601→            const Icon = RM_KIND_ICON[node.kind];
+   602→            const isProgressKind = node.kind === 'goal' || node.kind === 'task' || node.kind === 'file';
+   603→            return (
+   604→              <foreignObject key={node.id} x={f(p.x)} y={f(p.y)} width={RM_NODE_W} height={RM_NODE_H}>
+   605→                <div
+   606→                  className={cls}
+   607→                  role="button"
+   608→                  tabIndex={0}
+   609→                  aria-label={`${node.kind} node: ${live?.title ?? node.label}`}
+   610→                  onPointerDown={(e) => onNodePointerDown(e, node)}
+   611→                  onPointerMove={onNodePointerMove}
+   612→                  onPointerUp={(e) => onNodePointerUp(e, node)}
+   613→                  onPointerCancel={onNodePointerCancel}
+   614→                  onKeyDown={(e) => onNodeKeyDown(e, node)}
+   615→                >
+   616→                  <span className={`rm-node-stripe st-${st}`} />
+   617→                  <div className="rm-node-head">
+   618→                    <span className={`rm-node-ico st-${st}`}>
+   619→                      <Icon />
+   620→                    </span>
+   621→                    <span className="rm-node-title">
+   622→                      {live?.title || 'Untitled'}
+   623→                      {live?.missing && <em className="rm-deleted-tag">deleted</em>}
+   624→                    </span>
+   625→                  </div>
+   626→
+   627→                  {isProgressKind && live && (
+   628→                    <div className="rm-node-pbar">
+   629→                      <span
+   630→                        style={{
+   631→                          width: `${clamp(live.pct, 0, 100)}%`,
+   632→                          background: live.status === 'blocked' ? 'var(--coral)' : undefined,
+   633→                        }}
+   634→                      />
+   635→                    </div>
+   636→                  )}
+   637→
+   638→                  <div className="rm-node-meta">
+   639→                    {(node.kind === 'goal' || node.kind === 'task') && live && (
+   640→                      <>
+   641→                        <span className={`rm-mini-chip tone-${st}`}>{STATUS_LABEL[st]}</span>
+   642→                        <span className="mono">{live.pct}%</span>
+   643→                        {live.deadline && (
+   644→                          <span className={`mono rm-dl-${live.deadlineTone ?? 'ok'}`}>{live.deadline.slice(5)}</span>
+   645→                        )}
+   646→                      </>
+   647→                    )}
+   648→                    {node.kind === 'file' && live && (
+   649→                      <>
+   650→                        <span className="mono">{live.pct}%</span>
+   651→                        <span>
+   652→                          {live.pagesRead}/{live.pagesTotal}p
+   653→                        </span>
+   654→                        {live.deadline && (
+   655→                          <span className={`mono rm-dl-${live.deadlineTone ?? 'ok'}`}>{live.deadline.slice(5)}</span>
+   656→                        )}
+   657→                      </>
+   658→                    )}
+   659→                    {node.kind === 'milestone' && (
+   660→                      <>
+   661→                        <span className={`mono ${live?.deadlineTone === 'over' ? 'rm-dl-over' : ''}`}>
+   662→                          {node.milestoneDate ? node.milestoneDate.slice(5) : 'no date'}
+   663→                        </span>
+   664→                        <button
+   665→                          type="button"
+   666→                          className={`rm-ms-toggle${node.done ? ' on' : ''}`}
+   667→                          aria-pressed={node.done}
+   668→                          aria-label={node.done ? 'Mark milestone as not done' : 'Mark milestone as done'}
+   669→                          title={node.done ? 'Mark as not done' : 'Mark as done'}
+   670→                          onPointerDown={(e) => e.stopPropagation()}
+   671→                          onClick={(e) => {
+   672→                            e.stopPropagation();
+   673→                            onToggleMilestone(node);
+   674→                          }}
+   675→                        />
+   676→                      </>
+   677→                    )}
+   678→                    {node.kind === 'note' && <span className="rm-note-txt">{node.note || '—'}</span>}
+   679→                  </div>
+   680→                </div>
+   681→              </foreignObject>
+   682→            );
+   683→          })}
+   684→        </g>
+   685→      </svg>
+   686→
+   687→      {roadmap.nodes.length === 0 && (
+   688→        <div className="rm-canvas-hint">
+   689→          <div>
+   690→            <div className="rm-hint-title">This canvas is empty</div>
+   691→            Use “Add node” to drop goals, tasks, files, milestones or notes —<br />
+   692→            then switch on “Link” and connect them to shape the path.
+   693→          </div>
+   694→        </div>
+   695→      )}
+   696→
+   697→      <div className="rm-canvas-badge mono">
+   698→        {roadmap.nodes.length} nodes · {roadmap.edges.length} links · drag to pan · scroll to zoom
+   699→      </div>
+   700→    </div>
+   701→  );
+   702→});
+   703→
+   704→export default RoadmapCanvas;
+   705→
