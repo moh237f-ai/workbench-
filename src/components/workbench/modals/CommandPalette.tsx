@@ -3,10 +3,10 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Sun, LayoutGrid, Target, Clock, Repeat, BookOpen, Library as LibraryIcon, Waypoints,
+  Sun, LayoutGrid, Target, Repeat, BookOpen, Library as LibraryIcon, Waypoints,
   CalendarDays, CalendarClock, BarChart3, Inbox,
-  Play, Square, Focus, Tag, Download, Palette, Undo2, Sparkles, Search as SearchIcon,
-  CornerDownLeft, FileText,
+  Play, Square, Focus, Tag, Palette, Undo2, Sparkles, Search as SearchIcon,
+  Settings2, FileText, Timer as TimerIcon,
 } from 'lucide-react';
 import { useWB, wbChildren, wbFileProgress } from '@/lib/workbench/store';
 import { computeProgress, computeStreak, fmtDuration } from '@/lib/workbench/helpers';
@@ -25,16 +25,14 @@ export function CommandPalette({
   open,
   onClose,
   onOpenLabels,
-  onOpenData,
+  onOpenSettings,
   onOpenCapture,
-  onOpenShortcuts,
 }: {
   open: boolean;
   onClose: () => void;
   onOpenLabels: () => void;
-  onOpenData: () => void;
+  onOpenSettings: () => void;
   onOpenCapture: () => void;
-  onOpenShortcuts: () => void;
 }) {
   const store = useWB();
   const [q, setQ] = useState('');
@@ -64,8 +62,7 @@ export function CommandPalette({
       { id: 'undo', group: 'Actions', label: 'Undo', sub: 'Ctrl+Z', icon: <Undo2 size={16} />, action: () => { store.undo(); onClose(); } },
       { id: 'theme', group: 'Actions', label: 'Cycle theme', sub: 'Ctrl+J', icon: <Palette size={16} />, action: () => { store.cycleTheme(); onClose(); } },
       { id: 'labels', group: 'Manage', label: 'Manage labels', icon: <Tag size={16} />, action: () => { onClose(); onOpenLabels(); } },
-      { id: 'data', group: 'Manage', label: 'Backup & data', icon: <Download size={16} />, action: () => { onClose(); onOpenData(); } },
-      { id: 'keys', group: 'Manage', label: 'Keyboard shortcuts', icon: <CornerDownLeft size={16} />, action: () => { onClose(); onOpenShortcuts(); } },
+      { id: 'settings', group: 'Manage', label: 'Settings — theme, calendar, backup, shortcuts', icon: <Settings2 size={16} />, action: () => { onClose(); onOpenSettings(); } },
       { id: 'v-today', group: 'Go to', label: 'Today', icon: <Sun size={16} />, action: go('today') },
       { id: 'v-inbox', group: 'Go to', label: 'Inbox', icon: <Inbox size={16} />, action: go('inbox') },
       { id: 'v-dash', group: 'Go to', label: 'Dashboard', icon: <LayoutGrid size={16} />, action: go('dashboard') },
@@ -73,7 +70,7 @@ export function CommandPalette({
       { id: 'v-library', group: 'Go to', label: 'Library', sub: 'G B', icon: <LibraryIcon size={16} />, action: go('library') },
       { id: 'v-roadmap', group: 'Go to', label: 'Roadmaps', sub: 'G M', icon: <Waypoints size={16} />, action: go('roadmap') },
       { id: 'v-planner', group: 'Go to', label: 'Planner', sub: 'G P', icon: <CalendarClock size={16} />, action: go('planner') },
-      { id: 'v-log', group: 'Go to', label: 'Activity Log', icon: <Clock size={16} />, action: go('log') },
+      { id: 'v-reports', group: 'Go to', label: 'Reports & Activity log', sub: 'G R', icon: <BarChart3 size={16} />, action: go('reports') },
       { id: 'v-habits', group: 'Go to', label: 'Habits', icon: <Repeat size={16} />, action: go('habits') },
       { id: 'v-journal', group: 'Go to', label: 'Journal', icon: <BookOpen size={16} />, action: go('journal') },
       { id: 'v-calendar', group: 'Go to', label: 'Calendar', icon: <CalendarDays size={16} />, action: go('calendar') },
@@ -184,8 +181,8 @@ export function CommandPalette({
           group: 'Logged time',
           label: e.note,
           sub: `${e.date} · ${fmtDuration(e.durationMin)}`,
-          icon: <Clock size={16} />,
-          action: () => { onClose(); store.setView('log'); },
+          icon: <TimerIcon size={16} />,
+          action: () => { onClose(); store.setView('reports'); },
         });
       }
     });

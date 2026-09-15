@@ -230,15 +230,53 @@ export function parseCapture(text: string): ParsedCapture {
 
 /* ---------- Reports range ---------- */
 
-export function rangeToDates(range: string): [string, string] {
+/** Last N days INCLUDING today, as an inclusive [start, today] ISO pair. */
+export function lastNDays(n: number): [string, string] {
+  const t = todayStr();
+  const d = parseDate(t);
+  d.setDate(d.getDate() - (n - 1));
+  return [isoDate(d), t];
+}
+
+export function rangeToDates(range: string, custom?: { from: string; to: string }): [string, string] {
   const t = todayStr();
   if (range === 'today') return [t, t];
+  if (range === 'last3') return lastNDays(3);
+  if (range === 'last7') return lastNDays(7);
+  if (range === 'last30') return lastNDays(30);
   if (range === 'week') return [isoDate(startOfWeek(new Date())), t];
   if (range === 'month') {
     const d = new Date();
     return [isoDate(new Date(d.getFullYear(), d.getMonth(), 1)), t];
   }
+  if (range === 'year') {
+    const d = new Date();
+    return [isoDate(new Date(d.getFullYear(), 0, 1)), t];
+  }
+  if (range === 'lastyear') {
+    const d = new Date();
+    return [isoDate(new Date(d.getFullYear() - 1, 0, 1)), isoDate(new Date(d.getFullYear() - 1, 11, 31))];
+  }
+  if (range === 'custom' && custom?.from && custom?.to) {
+    return custom.from <= custom.to ? [custom.from, custom.to] : [custom.to, custom.from];
+  }
   return ['0000-01-01', '9999-12-31'];
+}
+
+export function rangeLabel(range: string): string {
+  const map: Record<string, string> = {
+    today: 'Today',
+    last3: 'Last 3 days',
+    last7: 'Last 7 days',
+    week: 'This week',
+    month: 'This month',
+    last30: 'Last 30 days',
+    year: 'This year',
+    lastyear: 'Last year',
+    all: 'All time',
+    custom: 'Custom',
+  };
+  return map[range] || 'Range';
 }
 
 export function entriesInRange(entries: Entry[], start: string, end: string): Entry[] {

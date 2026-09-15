@@ -1,0 +1,434 @@
+/* ================================================================
+   REPORTS VIEW — dedicated styles (v6 deep upgrade)
+   Imported ONLY by ReportsView.tsx — globals.css stays untouched.
+   Sections: range bar · range meta · section-title icons · insights ·
+   contribution graph · month chart · chart sub-labels · activity log ·
+   PRINT / Save-as-PDF rules
+   ================================================================ */
+
+/* ---------- 1. range bar (rendered inside .header-actions) ---------- */
+
+.report-rangebar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.report-rangebar .radio-pills { margin: 0; }
+
+.report-custom-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.report-custom-row .df-field { width: 178px; flex: none; }
+.report-custom-row .df-compact .df-btn { padding: 6px 9px; }
+.report-dash {
+  color: var(--faint);
+  font-weight: 700;
+  padding-bottom: 11px;
+  user-select: none;
+}
+
+/* ---------- 2. range meta line (top of the report body) ---------- */
+
+.report-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-bottom: 18px;
+  padding: 11px 16px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: linear-gradient(135deg, var(--pine-light), transparent 70%), var(--surface);
+  font-size: 12.5px;
+  color: var(--muted2);
+}
+.rm-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 750;
+  color: var(--ink);
+  font-size: 13px;
+}
+.rm-label svg { color: var(--pine); flex-shrink: 0; }
+.rm-dates { display: inline-flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.rm-primary { font-weight: 650; color: var(--ink); }
+.rm-alt {
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 11px;
+  color: var(--faint);
+}
+.rm-extra {
+  margin-left: auto;
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+/* section titles carrying an icon */
+.section-title.st-ico {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.section-title.st-ico svg {
+  color: var(--pine);
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+}
+
+/* ---------- 3. insight cards (weakness deep-dive) ---------- */
+
+.insight-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.insight-chip {
+  --tone: var(--pine);
+  --tone-light: var(--pine-light);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--tone) 32%, var(--hairline));
+  background: var(--tone-light);
+}
+.insight-chip.tone-warn { --tone: var(--amber); --tone-light: var(--amber-light); }
+.insight-chip.tone-bad { --tone: var(--coral); --tone-light: var(--coral-light); }
+.insight-ico { color: var(--tone); flex-shrink: 0; margin-top: 2px; display: inline-flex; }
+.insight-text { display: block; font-size: 13px; font-weight: 700; color: var(--ink); line-height: 1.3; }
+.insight-sub { display: block; font-size: 11.5px; color: var(--muted2); margin-top: 2px; line-height: 1.45; }
+
+/* ---------- 4. contribution graph (GitHub-style heatmap) ---------- */
+
+.contribution-wrap {
+  --cg-cell: 12px;
+  --cg-gap: 3px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cg-scroll { overflow-x: auto; padding-bottom: 4px; }
+.cg-months {
+  display: grid;
+  grid-auto-flow: column;
+  /* one label per WEEK column — must match the contribution-grid pitch exactly
+     (12px cell + 3px column-gap = 15px), else the month labels drift off their weeks */
+  grid-auto-columns: calc(var(--cg-cell) + var(--cg-gap));
+  margin-left: 34px;
+  overflow: hidden;
+}
+.cg-month-lbl {
+  font-size: 9px;
+  font-family: var(--font-jetbrains), monospace;
+  color: var(--faint);
+  line-height: 12px;
+  height: 12px;
+  white-space: nowrap;
+  /* label is wider than its 15px track: let it spill right into the empty
+     neighbour cells (GitHub-style), the container clips at the grid edge */
+  overflow: visible;
+  text-overflow: clip;
+}
+.cg-main { display: flex; gap: 8px; align-items: flex-start; }
+.cg-weekdays {
+  display: grid;
+  grid-template-rows: repeat(7, var(--cg-cell));
+  gap: var(--cg-gap);
+  width: 26px;
+  flex: none;
+}
+.cg-weekdays span {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-size: 8.5px;
+  color: var(--faint);
+  font-family: var(--font-jetbrains), monospace;
+  line-height: 1;
+}
+.contribution-grid {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: var(--cg-cell);
+  grid-template-rows: repeat(7, var(--cg-cell));
+  gap: var(--cg-gap);
+}
+.cg-cell {
+  width: var(--cg-cell);
+  height: var(--cg-cell);
+  border-radius: 3px;
+  background: var(--surface-alt);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hairline) 65%, transparent);
+}
+.cg-cell.l1 { background: color-mix(in srgb, var(--pine) 22%, var(--surface-solid)); box-shadow: none; }
+.cg-cell.l2 { background: color-mix(in srgb, var(--pine) 45%, var(--surface-solid)); box-shadow: none; }
+.cg-cell.l3 { background: color-mix(in srgb, var(--pine) 72%, var(--surface-solid)); box-shadow: none; }
+.cg-cell.l4 { background: var(--pine); box-shadow: none; }
+.cg-cell.off {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--hairline) 28%, transparent);
+}
+.cg-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--hairline);
+}
+.cg-legend { display: flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--faint); }
+.cg-legend .cg-cell { width: 10px; height: 10px; border-radius: 3px; }
+.cg-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--muted2);
+}
+.cg-sum { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.cg-sum svg { color: var(--pine); flex-shrink: 0; }
+.cg-sum b { color: var(--ink); font-family: var(--font-jetbrains), monospace; font-weight: 700; }
+
+/* ---------- 5. month chart (yearly view) ---------- */
+
+.monthchart { display: flex; align-items: flex-end; gap: 6px; height: 150px; padding-top: 10px; }
+.monthchart-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  height: 100%;
+}
+.monthchart-bars {
+  display: flex;
+  gap: 3px;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.mc-bar {
+  width: 9px;
+  max-width: 42%;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: linear-gradient(180deg, var(--pine), var(--pine-dark));
+  transition: height 0.4s var(--ease);
+}
+.mc-bar.read {
+  background: linear-gradient(180deg, var(--violet), color-mix(in srgb, var(--violet) 70%, #000));
+}
+.monthchart-lbl {
+  font-size: 9px;
+  color: var(--faint);
+  font-family: var(--font-jetbrains), monospace;
+  line-height: 1;
+}
+.mc-legend { display: flex; gap: 16px; margin-top: 10px; font-size: 11px; color: var(--muted2); flex-wrap: wrap; }
+.mc-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.mc-dot { width: 9px; height: 9px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
+
+/* ---------- 6. dual-calendar sub-labels + misc chart bits ---------- */
+
+.daychart-sub,
+.bar-sub {
+  font-size: 8.5px;
+  color: var(--faint);
+  font-family: var(--font-jetbrains), monospace;
+  line-height: 1.25;
+}
+.split-note { font-size: 12px; color: var(--muted2); margin-top: 6px; }
+.split-note b { color: var(--violet); font-family: var(--font-jetbrains), monospace; }
+
+/* ---------- 7. activity log (collapsible + embedded) ---------- */
+
+.report-log { margin-top: 26px; }
+.report-log .wb-coll-head > svg:first-child { color: var(--pine); flex-shrink: 0; }
+.log-count {
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 11px;
+  color: var(--muted2);
+  background: var(--surface-alt);
+  border: 1px solid var(--hairline);
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.log-embedded-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.log-embedded-sub { font-size: 12px; color: var(--muted2); }
+.report-log-scroll { max-height: 560px; overflow-y: auto; padding-right: 4px; }
+.report-log-scroll::-webkit-scrollbar { width: 8px; }
+.report-log-scroll::-webkit-scrollbar-track { background: transparent; }
+.report-log-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted2) 32%, transparent);
+  border-radius: 8px;
+}
+.report-log-scroll::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted2) 55%, transparent);
+}
+
+/* ---------- 8. print / save as PDF ---------- */
+
+.report-print-head { display: none; }
+
+@page { margin: 14mm; }
+
+@media print {
+  body { background: #fff !important; }
+  body::before { display: none !important; }
+  body * { visibility: hidden; }
+  .report-print-root, .report-print-root * { visibility: visible; }
+
+  .report-print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    background: #fff;
+    color: #111;
+    /* force the light palette on paper, whatever the screen theme is */
+    --pine: #0d8f7d;
+    --pine-dark: #0a6f62;
+    --pine-light: rgba(13, 143, 125, 0.14);
+    --violet: #7b61dc;
+    --violet-light: rgba(123, 97, 220, 0.12);
+    --amber: #b45309;
+    --amber-light: rgba(180, 83, 9, 0.12);
+    --coral: #c24058;
+    --coral-light: rgba(194, 64, 88, 0.1);
+    --ink: #16211c;
+    --muted2: #4c5a53;
+    --faint: #6b7a72;
+    --surface: #ffffff;
+    --surface-alt: #eef3f0;
+    --surface-solid: #ffffff;
+    --hairline: #d7e0da;
+  }
+  .report-print-root * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .no-print { display: none !important; }
+
+  .report-print-head {
+    display: block;
+    margin: 0 0 16px;
+    padding-bottom: 12px;
+    border-bottom: 2px solid #16211c;
+  }
+  .rph-app {
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 750;
+    color: #4c5a53;
+  }
+  .rph-title {
+    font-family: var(--font-sora), var(--font-inter), sans-serif;
+    font-size: 23px;
+    font-weight: 800;
+    color: #16211c;
+    margin-top: 3px;
+  }
+  .rph-meta { font-size: 13px; color: #16211c; margin-top: 6px; font-weight: 650; }
+  .rph-gen { font-size: 11px; color: #4c5a53; margin-top: 3px; }
+
+  /* neutralize glassy card surfaces on paper */
+  .report-print-root .card,
+  .report-print-root .stat-card,
+  .report-print-root .wb-collapsible {
+    background: #fff !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-color: #d7e0da !important;
+  }
+  .report-print-root .stat-card::before,
+  .report-print-root .stat-card::after { display: none !important; }
+
+  /* pagination: keep cards intact, let the log flow */
+  .report-print-root .section-title { break-after: avoid; }
+  .report-print-root .stat-card,
+  .report-print-root .card { break-inside: avoid; }
+  .report-print-root .report-log { break-inside: auto; }
+  .report-print-root .cg-scroll,
+  .report-print-root .report-log-scroll {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+
+  /* activity log prints fully expanded + non-interactive */
+  .report-print-root .wb-collapsible:not(.open) .wb-coll-body { display: block !important; }
+  .report-print-root .wb-coll-head { pointer-events: none; }
+  .report-print-root .wb-coll-head .chev { display: none; }
+
+  .report-print-root.fade-in,
+  .report-print-root .fade-in { animation: none !important; }
+}
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 700px) {
+  .report-custom-row { width: 100%; }
+  .report-custom-row .df-field { width: auto; flex: 1 1 150px; }
+  .report-dash { display: none; }
+  .cg-months { margin-left: 30px; }
+  .cg-weekdays { width: 22px; }
+  .insight-row { grid-template-columns: 1fr; }
+  .rm-extra { margin-left: 0; }
+}
+
+/* ---------- keyboard + touch ---------- */
+
+.report-rangebar .radio-pill:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+@media (pointer: coarse) {
+  .report-rangebar .radio-pill { padding: 10px 15px; min-height: 44px; }
+}
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .report-rangebar .radio-pill,
+  .insight-chip,
+  .cg-cell,
+  .mc-bar,
+  .report-log .wb-coll-head,
+  .report-log .wb-coll-head .chev,
+  .report-log-scroll::-webkit-scrollbar-thumb,
+  .report-print-root.fade-in,
+  .report-print-root .fade-in,
+  .report-print-root .bar-fill,
+  .report-print-root .daychart-bar,
+  .report-print-root .radio-pill,
+  .report-print-root .pbar > span {
+    transition: none !important;
+    animation: none !important;
+  }
+}

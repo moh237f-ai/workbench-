@@ -1,0 +1,702 @@
+   722→                <span>{label}</span>
+   723→              </button>
+   724→            ))}
+   725→          </div>
+   726→        </div>
+   727→
+   728→        {/* task picker */}
+   729→        {kind === 'task' && !selTask && (
+   730→          <div className="plan-add-sec">
+   731→            <span className="plan-add-lab">
+   732→              Pick a task <span className="plan-add-lab-alt">— or type a new one above</span>
+   733→            </span>
+   734→            <div className="plan-add-search">
+   735→              <Search size={13} aria-hidden />
+   736→              <input
+   737→                value={taskQuery}
+   738→                onChange={(e) => setTaskQuery(e.target.value)}
+   739→                placeholder="Search ready tasks…"
+   740→                aria-label="Search tasks"
+   741→              />
+   742→            </div>
+   743→            <div className="plan-add-list plan-scroll">
+   744→              {taskPool.map((it) => (
+   745→                <TaskRow key={it.id} it={it} parent={parentOf(it)} onPick={pickTask} />
+   746→              ))}
+   747→              {!taskPool.length && (
+   748→                <div className="plan-add-none">
+   749→                  {taskQuery ? 'No matching tasks.' : 'No ready tasks — type a title to create one.'}
+   750→                </div>
+   751→              )}
+   752→            </div>
+   753→          </div>
+   754→        )}
+   755→
+   756→        {/* reading picker */}
+   757→        {kind === 'reading' && (
+   758→          <div className="plan-add-sec">
+   759→            <span className="plan-add-lab">Pick a file</span>
+   760→            <div className="plan-add-search">
+   761→              <Search size={13} aria-hidden />
+   762→              <input
+   763→                value={fileQuery}
+   764→                onChange={(e) => setFileQuery(e.target.value)}
+   765→                placeholder="Search the library…"
+   766→                aria-label="Search files"
+   767→              />
+   768→            </div>
+   769→            <div className="plan-add-list plan-scroll">
+   770→              {filePool.map((f) => (
+   771→                <button
+   772→                  key={f.id}
+   773→                  type="button"
+   774→                  className={`plan-add-row${fileId === f.id ? ' sel' : ''}`}
+   775→                  aria-pressed={fileId === f.id}
+   776→                  onClick={() => setFileId(f.id)}
+   777→                  title={f.title}
+   778→                >
+   779→                  <BookOpen size={14} className="plan-add-row-ico violet" aria-hidden />
+   780→                  <span className="plan-add-row-main">
+   781→                    <span className="plan-add-row-title">{f.title}</span>
+   782→                    <span className="plan-add-row-sub">
+   783→                      <span className="chip chip-ok">
+   784→                        {Math.max(0, f.pageCount - wbFileReadPages(f))}p left
+   785→                      </span>
+   786→                      <FileDueChip f={f} />
+   787→                    </span>
+   788→                  </span>
+   789→                </button>
+   790→              ))}
+   791→              {!filePool.length && (
+   792→                <div className="plan-add-none">
+   793→                  {fileQuery ? 'No matching files.' : 'No unread files in the library.'}
+   794→                </div>
+   795→              )}
+   796→            </div>
+   797→          </div>
+   798→        )}
+   799→
+   800→        {/* goal-work: pick a goal, then one of its ready sub-tasks */}
+   801→        {kind === 'goalwork' && !selTask && (
+   802→          <div className="plan-add-sec">
+   803→            <span className="plan-add-lab">Pick a goal, then a task under it</span>
+   804→            <div className="plan-add-search">
+   805→              <Search size={13} aria-hidden />
+   806→              <input
+   807→                value={goalQuery}
+   808→                onChange={(e) => setGoalQuery(e.target.value)}
+   809→                placeholder="Search goals…"
+   810→                aria-label="Search goals"
+   811→              />
+   812→            </div>
+   813→            <div className="plan-add-list plan-scroll">
+   814→              {goalPool.map((g) => (
+   815→                <button
+   816→                  key={g.id}
+   817→                  type="button"
+   818→                  className={`plan-add-row${goalId === g.id ? ' sel' : ''}`}
+   819→                  aria-pressed={goalId === g.id}
+   820→                  onClick={() => setGoalId(goalId === g.id ? null : g.id)}
+   821→                  title={g.title}
+   822→                >
+   823→                  <Target size={14} className="plan-add-row-ico" aria-hidden />
+   824→                  <span className="plan-add-row-main">
+   825→                    <span className="plan-add-row-title">{g.title}</span>
+   826→                    <span className="plan-add-row-sub">
+   827→                      <span className="chip chip-ok">
+   828→                        {computeProgress(g, (id) => items.filter((i) => i.parentId === id))}%
+   829→                      </span>
+   830→                      <span className="plan-add-row-goal">
+   831→                        {
+   832→                          items.filter(
+   833→                            (i) => i.parentId === g.id && !['done', 'archived'].includes(i.status)
+   834→                          ).length
+   835→                        }{' '}
+   836→                        open tasks
+   837→                      </span>
+   838→                    </span>
+   839→                  </span>
+   840→                </button>
+   841→              ))}
+   842→              {!goalPool.length && (
+   843→                <div className="plan-add-none">
+   844→                  {goalQuery ? 'No matching goals.' : 'No active goals yet.'}
+   845→                </div>
+   846→              )}
+   847→            </div>
+   848→            {selGoal && (
+   849→              <div className="plan-add-sub">
+   850→                <span className="plan-add-lab">Tasks under {selGoal.title}</span>
+   851→                <div className="plan-add-list plan-scroll">
+   852→                  {goalTasks.map((it) => (
+   853→                    <TaskRow key={it.id} it={it} parent={selGoal} onPick={pickTask} />
+   854→                  ))}
+   855→                  {!goalTasks.length && (
+   856→                    <div className="plan-add-none">No ready tasks under this goal.</div>
+   857→                  )}
+   858→                </div>
+   859→              </div>
+   860→            )}
+   861→          </div>
+   862→        )}
+   863→
+   864→        {/* habits: info + layer toggle + jump */}
+   865→        {kind === 'habit' && (
+   866→          <div className="plan-add-sec">
+   867→            <span className="plan-add-lab">Habits</span>
+   868→            <div className="plan-add-habit">
+   869→              <Repeat size={16} className="plan-add-habit-ico" aria-hidden />
+   870→              <p className="plan-add-habit-txt">
+   871→                Habits don&apos;t need a time block — they appear as a check-in strip under the day
+   872→                timeline, so you can tick them off right where you plan. Toggle the strip below or
+   873→                review streaks in the Habits view.
+   874→              </p>
+   875→              <div className="plan-add-habit-row">
+   876→                <span className="plan-add-habit-lab">Show habit strip</span>
+   877→                <label className="wb-switch" title="Toggle the habit strip">
+   878→                  <input
+   879→                    type="checkbox"
+   880→                    checked={habitLayerOn}
+   881→                    onChange={onToggleHabitLayer}
+   882→                    aria-label="Show the habit strip on the planner"
+   883→                  />
+   884→                  <span className="track">
+   885→                    <span className="knob" />
+   886→                  </span>
+   887→                </label>
+   888→              </div>
+   889→              <Btn
+   890→                size="sm"
+   891→                variant="ghost"
+   892→                onClick={() => {
+   893→                  onClose();
+   894→                  setView('habits');
+   895→                }}
+   896→              >
+   897→                <Repeat size={13} /> Open Habits view
+   898→              </Btn>
+   899→            </div>
+   900→          </div>
+   901→        )}
+   902→
+   903→        {/* foot */}
+   904→        <div className="plan-add-foot">
+   905→          <Btn size="sm" variant="ghost" onClick={onClose}>
+   906→            Cancel
+   907→          </Btn>
+   908→          {kind !== 'habit' && (
+   909→            <Btn size="sm" variant="primary" disabled={!canSubmit} onClick={submit}>
+   910→              {submitLabel}
+   911→            </Btn>
+   912→          )}
+   913→        </div>
+   914→      </div>
+   915→    </>,
+   916→    document.body
+   917→  );
+   918→}
+   919→
+   920→/* ==================== habit strip (under the day timeline) ==================== */
+   921→
+   922→function HabitsStrip({ date }: { date: string }) {
+   923→  const habits = useWB((s) => s.habits);
+   924→  const toggleHabitDay = useWB((s) => s.toggleHabitDay);
+   925→  const setView = useWB((s) => s.setView);
+   926→
+   927→  const days = useMemo(() => {
+   928→    const ws = startOfWeekStr(parseDate(date));
+   929→    return Array.from({ length: 7 }, (_, i) => addDaysStr(ws, i));
+   930→  }, [date]);
+   931→  const today = todayStr();
+   932→
+   933→  if (!habits.length) {
+   934→    return (
+   935→      <div className="plan-hab-empty">
+   936→        <span>No habits yet — build a streak from the Habits view.</span>
+   937→        <Btn size="sm" variant="ghost" onClick={() => setView('habits')}>
+   938→          <Repeat size={13} /> Open Habits
+   939→        </Btn>
+   940→      </div>
+   941→    );
+   942→  }
+   943→
+   944→  return (
+   945→    <div className="plan-habits">
+   946→      <div className="plan-hab-head" aria-hidden>
+   947→        <span className="plan-hab-head-lab">Habits · this week</span>
+   948→        <div className="plan-hab-days">
+   949→          {days.map((d) => (
+   950→            <span key={d} className={`plan-hab-hd${d === date ? ' cur' : ''}`}>
+   951→              {parseDate(d).toLocaleDateString(undefined, { weekday: 'narrow' })}
+   952→            </span>
+   953→          ))}
+   954→        </div>
+   955→      </div>
+   956→      {habits.map((h) => {
+   957→        const streak = computeStreak(h.log);
+   958→        return (
+   959→          <div key={h.id} className="plan-hab-row">
+   960→            <span className="plan-hab-name">
+   961→              <span className="plan-hab-dot" style={{ background: h.color }} aria-hidden />
+   962→              <span className="plan-hab-title" title={h.name}>
+   963→                {h.name}
+   964→              </span>
+   965→              {streak > 0 && <span className="chip chip-soon">{streak}d</span>}
+   966→            </span>
+   967→            <div className="plan-hab-days">
+   968→              {days.map((d) => {
+   969→                const done = !!h.log?.[d];
+   970→                const st: React.CSSProperties = {};
+   971→                (st as Record<string, string | number>)['--hab'] = h.color;
+   972→                return (
+   973→                  <button
+   974→                    key={d}
+   975→                    type="button"
+   976→                    className={`plan-hab-day${done ? ' done' : ''}${d === date ? ' cur' : ''}${d === today ? ' today' : ''}`}
+   977→                    style={st}
+   978→                    onClick={() => toggleHabitDay(h.id, d)}
+   979→                    aria-pressed={done}
+   980→                    aria-label={`${h.name} — ${fmtDateNice(d)} — ${done ? 'done' : 'not done'}`}
+   981→                    title={`${fmtDateNice(d)}${done ? ' · done' : ''}`}
+   982→                  >
+   983→                    {done && <Check size={11} aria-hidden />}
+   984→                  </button>
+   985→                );
+   986→              })}
+   987→            </div>
+   988→          </div>
+   989→        );
+   990→      })}
+   991→    </div>
+   992→  );
+   993→}
+   994→
+   995→/* ==================== Up Next card (isolated so the 1s ticker stays cheap) ==================== */
+   996→
+   997→interface UnBlock {
+   998→  kind: DragKind;
+   999→  id: string;
+  1000→  fileId: string | null;
+  1001→  title: string;
+  1002→  start: number;
+  1003→  end: number;
+  1004→}
+  1005→
+  1006→function UpNextCard({
+  1007→  date,
+  1008→  timeboxed,
+  1009→  fileBlocks,
+  1010→  fileById,
+  1011→}: {
+  1012→  date: string;
+  1013→  timeboxed: Item[];
+  1014→  fileBlocks: FilePlanBlock[];
+  1015→  fileById: Map<string, ResourceFile>;
+  1016→}) {
+  1017→  const { openItemDetail } = useViewActions();
+  1018→  const isToday = date === todayStr();
+  1019→  const now = useNow(isToday);
+  1020→
+  1021→  const blocks = useMemo<UnBlock[]>(() => {
+  1022→    const list: UnBlock[] = [
+  1023→      ...timeboxed
+  1024→        .filter((it) => it.status !== 'done')
+  1025→        .map((it) => {
+  1026→          const s = plannedStartToMin(it.plannedStart ?? '');
+  1027→          return {
+  1028→            kind: 'item' as const,
+  1029→            id: it.id,
+  1030→            fileId: null,
+  1031→            title: it.title,
+  1032→            start: s,
+  1033→            end: s + timeboxDurMin(it),
+  1034→          };
+  1035→        }),
+  1036→      ...fileBlocks
+  1037→        .filter((p) => !p.done)
+  1038→        .map((p) => ({
+  1039→          kind: 'file' as const,
+  1040→          id: p.id,
+  1041→          fileId: p.fileId,
+  1042→          title: fileById.get(p.fileId)?.title || 'Reading block',
+  1043→          start: p.startMin,
+  1044→          end: p.startMin + p.minutes,
+  1045→        })),
+  1046→    ];
+  1047→    list.sort((a, b) => a.start - b.start);
+  1048→    return list;
+  1049→  }, [timeboxed, fileBlocks, fileById]);
+  1050→
+  1051→  const nowMin = isToday ? now.getHours() * 60 + now.getMinutes() : -1;
+  1052→  const running = isToday ? blocks.find((b) => b.start <= nowMin && nowMin < b.end) : undefined;
+  1053→  const next = running ? undefined : blocks.find((b) => b.start >= nowMin);
+  1054→  const active = running ?? next;
+  1055→
+  1056→  const open = (b: UnBlock) => {
+  1057→    if (b.kind === 'item') openItemDetail(b.id);
+  1058→    else if (b.fileId) window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: b.fileId }));
+  1059→  };
+  1060→
+  1061→  let body: React.ReactNode;
+  1062→  if (active) {
+  1063→    const meta = running
+  1064→      ? `${minToHHMM(running.start)}–${minToHHMM(running.end)} · ${fmtDuration(Math.max(0, running.end - nowMin))} left`
+  1065→      : isToday
+  1066→        ? `at ${minToHHMM(next!.start)} · in ${fmtDuration(Math.max(0, next!.start - nowMin))}`
+  1067→        : `at ${minToHHMM(next!.start)}`;
+  1068→    body = (
+  1069→      <button
+  1070→        type="button"
+  1071→        className="plan-un-row"
+  1072→        onClick={() => open(active)}
+  1073→        title={running ? 'Open current block' : 'Open next block'}
+  1074→      >
+  1075→        {running && <span className="plan-un-dot" aria-hidden />}
+  1076→        <span className="plan-un-main">
+  1077→          <span className="plan-un-kicker">{running ? 'Now' : isToday ? 'Next' : 'First block'}</span>
+  1078→          <span className="plan-un-title">{active.title}</span>
+  1079→          <span className="plan-un-meta mono">{meta}</span>
+  1080→        </span>
+  1081→        <ChevronRight size={14} className="plan-un-go" aria-hidden />
+  1082→      </button>
+  1083→    );
+  1084→  } else {
+  1085→    body = (
+  1086→      <div className="plan-un-empty">
+  1087→        {isToday ? 'Nothing left today — nice.' : 'Nothing planned for this day.'}
+  1088→      </div>
+  1089→    );
+  1090→  }
+  1091→
+  1092→  return (
+  1093→    <div className="card plan-card">
+  1094→      <div className="plan-card-head">
+  1095→        <span className="plan-card-title">Up next</span>
+  1096→      </div>
+  1097→      {body}
+  1098→    </div>
+  1099→  );
+  1100→}
+  1101→
+  1102→/* ==================== day mode ==================== */
+  1103→
+  1104→function DayPlanner({ date }: { date: string }) {
+  1105→  const items = useWB((s) => s.items);
+  1106→  const files = useWB((s) => s.files);
+  1107→  const filePlans = useWB((s) => s.filePlans);
+  1108→  const capacity = useWB((s) => s.dailyCapacityMin);
+  1109→  const updateItem = useWB((s) => s.updateItem);
+  1110→  const addItem = useWB((s) => s.addItem);
+  1111→  const updateFilePlan = useWB((s) => s.updateFilePlan);
+  1112→  const deleteFilePlan = useWB((s) => s.deleteFilePlan);
+  1113→  const addFilePlan = useWB((s) => s.addFilePlan);
+  1114→  const snapshot = useWB((s) => s.snapshot);
+  1115→  const roadmaps = useWB((s) => s.roadmaps);
+  1116→  const confirmMsg = useConfirm();
+  1117→  const { openItemDetail } = useViewActions();
+  1118→
+  1119→  const scrollRef = useRef<HTMLDivElement | null>(null);
+  1120→  const lanesRef = useRef<HTMLDivElement | null>(null);
+  1121→  const [drag, setDrag] = useState<DragState | null>(null);
+  1122→  const [panel, setPanel] = useState<PanelState | null>(null);
+  1123→  const [poolDrag, setPoolDrag] = useState<PoolDrag | null>(null);
+  1124→  const [habitLayer, setHabitLayer] = useState(false);
+  1125→  const [goalsOpen, setGoalsOpen] = useState(true);
+  1126→  const [rmOpen, setRmOpen] = useState(true);
+  1127→  const closePanel = useCallback(() => setPanel(null), []);
+  1128→  const toggleHabitLayer = useCallback(() => setHabitLayer((v) => !v), []);
+  1129→
+  1130→  /* auto-scroll to 08:00 on mount / date change (a stale panel hides via panel.date !== date) */
+  1131→  useEffect(() => {
+  1132→    const el = scrollRef.current;
+  1133→    if (el) el.scrollTop = Math.max(0, (480 - DAY_START_MIN) * PX_PER_MIN - 8);
+  1134→  }, [date]);
+  1135→
+  1136→  /* safety net: discard drag if pointerup/cancel escapes the captured element */
+  1137→  useEffect(() => {
+  1138→    if (!drag) return;
+  1139→    const clear = () => setDrag(null);
+  1140→    window.addEventListener('pointerup', clear);
+  1141→    window.addEventListener('pointercancel', clear);
+  1142→    return () => {
+  1143→      window.removeEventListener('pointerup', clear);
+  1144→      window.removeEventListener('pointercancel', clear);
+  1145→    };
+  1146→  }, [drag]);
+  1147→
+  1148→  /* ---------- data ---------- */
+  1149→  const timeboxed = useMemo(() => wbTimeboxedItems(items, date), [items, date]);
+  1150→  const fileBlocks = useMemo(() => wbFilePlansForDate(filePlans, date), [filePlans, date]);
+  1151→  const fileById = useMemo(() => {
+  1152→    const m = new Map<string, ResourceFile>();
+  1153→    files.forEach((f) => m.set(f.id, f));
+  1154→    return m;
+  1155→  }, [files]);
+  1156→
+  1157→  const occupied = useMemo<Slot[]>(
+  1158→    () => [
+  1159→      ...timeboxed.map((it) => {
+  1160→        const s = plannedStartToMin(it.plannedStart ?? '');
+  1161→        return { start: s, end: s + timeboxDurMin(it) };
+  1162→      }),
+  1163→      ...fileBlocks.map((p) => ({ start: p.startMin, end: p.startMin + p.minutes })),
+  1164→    ],
+  1165→    [timeboxed, fileBlocks]
+  1166→  );
+  1167→
+  1168→  const plannedItemMin = useMemo(() => timeboxed.reduce((s, it) => s + timeboxDurMin(it), 0), [timeboxed]);
+  1169→  const plannedFileMin = useMemo(() => fileBlocks.reduce((s, p) => s + p.minutes, 0), [fileBlocks]);
+  1170→  const plannedMin = plannedItemMin + plannedFileMin;
+  1171→  const overCap = plannedMin > capacity;
+  1172→  const freeMin = Math.max(0, capacity - plannedMin);
+  1173→  const blockCount = timeboxed.length + fileBlocks.length;
+  1174→  const doneCount =
+  1175→    timeboxed.filter((it) => it.status === 'done').length + fileBlocks.filter((p) => p.done).length;
+  1176→
+  1177→  const suggested = useMemo(
+  1178→    () =>
+  1179→      items
+  1180→        .filter((i) => {
+  1181→          if (['done', 'archived', 'inbox'].includes(i.status)) return false;
+  1182→          if (i.plannedStart && i.plannedStart.slice(0, 10) === date) return false;
+  1183→          if (wbIsBlocked(items, i)) return false;
+  1184→          const du = i.deadline ? daysUntil(i.deadline) : null;
+  1185→          return (du !== null && du <= 3) || i.priority === 'p0' || i.priority === 'p1';
+  1186→        })
+  1187→        .sort((a, b) => {
+  1188→          const p = wbPriorityWeight(a.priority) - wbPriorityWeight(b.priority);
+  1189→          if (p) return p;
+  1190→          return (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31');
+  1191→        })
+  1192→        .slice(0, 30),
+  1193→    [items, date]
+  1194→  );
+  1195→
+  1196→  const readingGoals = useMemo(
+  1197→    () =>
+  1198→      files
+  1199→        .filter((f) => {
+  1200→          if (f.archived) return false;
+  1201→          const prog = wbFileProgress(f);
+  1202→          if (prog >= 100) return false;
+  1203→          if (f.deadline && daysUntil(f.deadline) <= 7) return true;
+  1204→          return prog > 0 || !!f.deadline; /* in progress, or unread with a deadline */
+  1205→        })
+  1206→        .sort((a, b) => (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31'))
+  1207→        .slice(0, 30),
+  1208→    [files]
+  1209→  );
+  1210→
+  1211→  /* ---------- goals & roadmaps bridges (v3) ---------- */
+  1212→
+  1213→  /* ready tasks whose parent is an active goal */
+  1214→  const fromGoals = useMemo(
+  1215→    () => {
+  1216→      const activeGoalIds = new Set(
+  1217→        items
+  1218→          .filter((g) => g.type === 'goal' && g.status !== 'done' && g.status !== 'archived')
+  1219→          .map((g) => g.id)
+  1220→      );
+  1221→      return items
+  1222→        .filter(
+  1223→          (i) =>
+  1224→            i.type === 'task' &&
+  1225→            i.parentId !== null &&
+  1226→            activeGoalIds.has(i.parentId) &&
+  1227→            !['done', 'archived', 'inbox'].includes(i.status) &&
+  1228→            !(i.plannedStart && i.plannedStart.slice(0, 10) === date) &&
+  1229→            !wbIsBlocked(items, i)
+  1230→        )
+  1231→        .sort((a, b) => {
+  1232→          const p = wbPriorityWeight(a.priority) - wbPriorityWeight(b.priority);
+  1233→          if (p) return p;
+  1234→          return (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31');
+  1235→        })
+  1236→        .slice(0, 4);
+  1237→    },
+  1238→    [items, date]
+  1239→  );
+  1240→
+  1241→  /* each roadmap's first node whose linked entity is unfinished and not yet on the plan */
+  1242→  const roadmapNext = useMemo<RmNext[]>(
+  1243→    () => {
+  1244→      const out: RmNext[] = [];
+  1245→      for (const rm of roadmaps) {
+  1246→        for (const node of rm.nodes) {
+  1247→          if (node.kind === 'task' && node.refId) {
+  1248→            const it = items.find((i) => i.id === node.refId);
+  1249→            if (!it || it.status === 'done' || it.status === 'archived') continue;
+  1250→            if (it.plannedStart && it.plannedStart.slice(0, 10) === date) continue; /* already on the plan */
+  1251→            out.push({ rm, node, kind: 'task', item: it });
+  1252→            break;
+  1253→          }
+  1254→          if (node.kind === 'file' && node.refId) {
+  1255→            const f = files.find((x) => x.id === node.refId);
+  1256→            if (!f || f.archived || wbFileProgress(f) >= 100) continue;
+  1257→            if (filePlans.some((p) => p.fileId === f.id && p.date === date)) continue;
+  1258→            out.push({ rm, node, kind: 'file', file: f });
+  1259→            break;
+  1260→          }
+  1261→        }
+  1262→      }
+  1263→      return out;
+  1264→    },
+  1265→    [roadmaps, items, files, filePlans, date]
+  1266→  );
+  1267→
+  1268→  const openRoadmap = useCallback((id: string) => {
+  1269→    useWB.setState({ view: 'roadmap', activeRoadmapId: id });
+  1270→  }, []);
+  1271→
+  1272→  /* ---------- scheduling ---------- */
+  1273→  const nowMinutes = (): number =>
+  1274→    date === todayStr() ? new Date().getHours() * 60 + new Date().getMinutes() : 0;
+  1275→
+  1276→  const scheduleItem = (it: Item) => {
+  1277→    const dur = it.estimateMin || 30;
+  1278→    const start = nextFreeSlot(dur, occupied, nowMinutes());
+  1279→    updateItem(
+  1280→      it.id,
+  1281→      {
+  1282→        plannedStart: dateTimeFromMin(date, start),
+  1283→        plannedEnd: dateTimeFromMin(date, start + dur),
+  1284→        startDate: date,
+  1285→      },
+  1286→      { snapshot: true }
+  1287→    );
+  1288→    toast('Scheduled', `${it.title} at ${minToHHMM(start)}`);
+  1289→  };
+  1290→
+  1291→  const addReadingBlock = (f: ResourceFile) => {
+  1292→    const start = nextFreeSlot(30, occupied, nowMinutes());
+  1293→    addFilePlan(f.id, date, start, 30);
+  1294→    toast('Reading block added', `${f.title} at ${minToHHMM(start)} · 30m`);
+  1295→  };
+  1296→
+  1297→  const autoPlan = () => {
+  1298→    const occ = occupied.map((o) => ({ ...o }));
+  1299→    let planned = plannedMin;
+  1300→    let blocks = 0;
+  1301→    let addedMin = 0;
+  1302→    let snapped = false;
+  1303→    const ensureSnap = () => {
+  1304→      if (!snapped) {
+  1305→        snapshot();
+  1306→        snapped = true;
+  1307→      }
+  1308→    };
+  1309→    for (const it of suggested) {
+  1310→      if (planned >= capacity) break;
+  1311→      const dur = it.estimateMin || 30;
+  1312→      const start = nextFreeSlot(dur, occ, nowMinutes());
+  1313→      ensureSnap();
+  1314→      updateItem(it.id, {
+  1315→        plannedStart: dateTimeFromMin(date, start),
+  1316→        plannedEnd: dateTimeFromMin(date, start + dur),
+  1317→        startDate: date,
+  1318→      });
+  1319→      occ.push({ start, end: start + dur });
+  1320→      planned += dur;
+  1321→      blocks++;
+  1322→      addedMin += dur;
+  1323→    }
+  1324→    let readings = 0;
+  1325→    for (const f of readingGoals) {
+  1326→      if (readings >= 2 || planned >= capacity) break;
+  1327→      const start = nextFreeSlot(30, occ, nowMinutes());
+  1328→      ensureSnap();
+  1329→      addFilePlan(f.id, date, start, 30);
+  1330→      occ.push({ start, end: start + 30 });
+  1331→      planned += 30;
+  1332→      blocks++;
+  1333→      addedMin += 30;
+  1334→      readings++;
+  1335→    }
+  1336→    if (!blocks) {
+  1337→      toast('Nothing to plan', 'Capacity is already committed.');
+  1338→      return;
+  1339→    }
+  1340→    toast('Auto-planned', `Planned ${blocks} block${blocks === 1 ? '' : 's'} · ${fmtDuration(addedMin)}`);
+  1341→  };
+  1342→
+  1343→  /* ---------- timeline header actions ---------- */
+  1344→  const copyYesterday = () => {
+  1345→    const y = addDaysStr(date, -1);
+  1346→    const yItems = wbTimeboxedItems(items, y);
+  1347→    const yPlans = wbFilePlansForDate(filePlans, y);
+  1348→    const n = yItems.length + yPlans.length;
+  1349→    if (!n) {
+  1350→      toast('Nothing to copy', 'No blocks on yesterday.');
+  1351→      return;
+  1352→    }
+  1353→    snapshot();
+  1354→    yItems.forEach((it) => {
+  1355→      const s = plannedStartToMin(it.plannedStart ?? '');
+  1356→      const dur = timeboxDurMin(it);
+  1357→      addItem({
+  1358→        title: it.title,
+  1359→        type: it.type,
+  1360→        priority: it.priority,
+  1361→        color: it.color,
+  1362→        estimateMin: dur,
+  1363→        plannedStart: dateTimeFromMin(date, s),
+  1364→        plannedEnd: dateTimeFromMin(date, s + dur),
+  1365→        startDate: date,
+  1366→        status: 'todo',
+  1367→      });
+  1368→    });
+  1369→    yPlans.forEach((p) => addFilePlan(p.fileId, date, p.startMin, p.minutes));
+  1370→    toast('Copied from yesterday', `Copied ${n} block${n === 1 ? '' : 's'} from yesterday.`);
+  1371→  };
+  1372→
+  1373→  const clearDay = () => {
+  1374→    if (!blockCount) return;
+  1375→    if (!confirmMsg(`Clear all blocks on ${fmtDateNice(date)}?`)) return;
+  1376→    snapshot();
+  1377→    timeboxed.forEach((it) => updateItem(it.id, { plannedStart: null, plannedEnd: null }));
+  1378→    fileBlocks.forEach((p) => deleteFilePlan(p.id));
+  1379→    toast('Day cleared', `${blockCount} block${blockCount === 1 ? '' : 's'} removed.`);
+  1380→  };
+  1381→
+  1382→  const scrollToNow = () => {
+  1383→    const el = scrollRef.current;
+  1384→    if (!el) return;
+  1385→    const n = new Date();
+  1386→    const nowMin = n.getHours() * 60 + n.getMinutes();
+  1387→    el.scrollTo({
+  1388→      top: Math.max(0, (nowMin - DAY_START_MIN) * PX_PER_MIN - el.clientHeight / 2),
+  1389→      behavior: 'smooth',
+  1390→    });
+  1391→  };
+  1392→
+  1393→  /* ---------- add-block panel (click on empty timeline, or prefilled from goals) ---------- */
+  1394→  const openQuickAdd = (e: React.MouseEvent<HTMLDivElement>) => {
+  1395→    const t = e.target as HTMLElement;
+  1396→    if (t.closest('.plan-block')) return;
+  1397→    const rect = lanesRef.current?.getBoundingClientRect();
+  1398→    if (!rect) return;
+  1399→    const minute = clamp(snapQ(DAY_START_MIN + (e.clientY - rect.top) / PX_PER_MIN), 0, 1425);
+  1400→    setPanel({
+  1401→      date,
+  1402→      x: anchorX(e.clientX),
+  1403→      y: anchorY(e.clientY),
+  1404→      startMin: minute,
+  1405→      kind: 'task',
+  1406→      taskId: null,
+  1407→    });
+  1408→  };
+  1409→
+  1410→  /** open the panel pre-filled with a task ("From goals" rows) at the next free slot */
+  1411→  const openPrefilled = (e: React.MouseEvent<HTMLElement>, it: Item) => {
+  1412→    const dur = it.estimateMin || 30;
+  1413→    const start = nextFreeSlot(dur, occupied, nowMinutes());
+  1414→    setPanel({
+  1415→      date,
+  1416→      x: anchorX(e.clientX),
+  1417→      y: anchorY(e.clientY),
+  1418→      startMin: start,
+  1419→      kind: 'task',
+  1420→      taskId: it.id,
+  1421→    });
+
+[showing lines 722-1421 of 2521; use offset=1422 with limit to continue reading]

@@ -1,0 +1,934 @@
+     1→/* ==================== Library View: PDF shelf — covers, deadlines, reading stats ==================== */
+     2→'use client';
+     3→
+     4→import './library.css';
+     5→
+     6→import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+     7→import {
+     8→  BookOpen, Check, Clock, FileText, FolderInput, FolderPlus, Link2, Pencil, PenLine, Search, Star, Trash2, Upload, X,
+     9→} from 'lucide-react';
+    10→import {
+    11→  useWB, wbFileDeadlineStatus, wbFileMinutes, wbFileProgress, wbFileReadPages, wbFileSeconds,
+    12→  wbItemsForFile, wbReadingMinutesInRange, wbReadingPagesInRange,
+    13→} from '@/lib/workbench/store';
+    14→import { daysUntil, fmtDuration, startOfWeekStr, todayStr, uid } from '@/lib/workbench/helpers';
+    15→import { FOLDER_SWATCHES } from '@/lib/workbench/types';
+    16→import type { LibraryFolder, ResourceFile } from '@/lib/workbench/types';
+    17→import { putBlob, purgeFileArtifacts, saveCover } from '@/lib/workbench/idb';
+    18→import { loadDocFromBlob, pageToDataUrl } from '@/lib/workbench/pdf';
+    19→import { useFileCover } from '@/lib/workbench/covers';
+    20→import { Btn, IconBtn, Seg, toast, useConfirm } from '../ui/primitives';
+    21→
+    22→/* ---------- local types ---------- */
+    23→
+    24→type LibFilter = 'all' | 'reading' | 'unread' | 'deadline' | 'archived';
+    25→type LibSort = 'recent' | 'deadline' | 'progress' | 'title';
+    26→
+    27→const FILTER_OPTIONS: { id: LibFilter; label: string }[] = [
+    28→  { id: 'all', label: 'All' },
+    29→  { id: 'reading', label: 'Reading' },
+    30→  { id: 'unread', label: 'Unread' },
+    31→  { id: 'deadline', label: 'Deadline' },
+    32→  { id: 'archived', label: 'Archived' },
+    33→];
+    34→
+    35→/* ---------- shared import pipeline (module level: header button + drop zone + empty state) ---------- */
+    36→
+    37→let importingCount = 0;
+    38→const importingListeners = new Set<() => void>();
+    39→
+    40→function bumpImporting(delta: number): void {
+    41→  importingCount = Math.max(0, importingCount + delta);
+    42→  importingListeners.forEach((l) => l());
+    43→}
+    44→
+    45→function useImportingCount(): number {
+    46→  return useSyncExternalStore(
+    47→    (cb) => {
+    48→      importingListeners.add(cb);
+    49→      return () => {
+    50→        importingListeners.delete(cb);
+    51→      };
+    52→    },
+    53→    () => importingCount
+    54→  );
+    55→}
+    56→
+    57→/** Upload pipeline: store blob → render cover → register file. Artifacts purged on failure. */
+    58→async function importPdfFiles(list: File[]): Promise<void> {
+    59→  bumpImporting(list.length);
+    60→  for (const file of list) {
+    61→    const id = uid();
+    62→    try {
+    63→      await putBlob(id, file);
+    64→      const doc = await loadDocFromBlob(file);
+    65→      const cover = await pageToDataUrl(doc, 1, 420, 0.72);
+    66→      await saveCover(id, cover);
+    67→      const title = file.name.replace(/\.pdf$/i, '');
+    68→      useWB.getState().addFile({
+    69→        id,
+    70→        title,
+    71→        fileName: file.name,
+    72→        size: file.size,
+    73→        pageCount: doc.numPages,
+    74→      });
+    75→      toast('Added to library', title);
+    76→    } catch {
+    77→      await purgeFileArtifacts(id).catch(() => undefined);
+    78→      toast('Import failed', file.name);
+    79→    } finally {
+    80→      bumpImporting(-1);
+    81→    }
+    82→  }
+    83→}
+    84→
+    85→/** Hidden multi-PDF file input + programmatic opener (self-contained per consumer). */
+    86→function usePdfPicker(onFiles: (files: File[]) => void): { open: () => void; input: React.ReactNode } {
+    87→  const inputRef = useRef<HTMLInputElement | null>(null);
+    88→  const open = useCallback(() => inputRef.current?.click(), []);
+    89→  const input = (
+    90→    <input
+    91→      ref={inputRef}
+    92→      type="file"
+    93→      accept="application/pdf"
+    94→      multiple
+    95→      hidden
+    96→      onChange={(e) => {
+    97→        const el = e.currentTarget;
+    98→        const picked = Array.from(el.files || []);
+    99→        el.value = '';
+   100→        if (picked.length) onFiles(picked);
+   101→      }}
+   102→    />
+   103→  );
+   104→  return { open, input };
+   105→}
+   106→
+   107→/** useFileCover plus a "gave up" flag: distinguishes loading (shimmer) from failed (icon tile). */
+   108→function useCoverWithFallback(file: ResourceFile): { cover: string | null; failed: boolean } {
+   109→  const cover = useFileCover(file);
+   110→  const epoch = `${file.id}::${file.coverMode}::${file.coverPage}`;
+   111→  const [timedOut, setTimedOut] = useState<{ epoch: string; done: boolean }>({ epoch: '', done: false });
+   112→  useEffect(() => {
+   113→    const t = setTimeout(() => setTimedOut({ epoch, done: true }), 2400);
+   114→    return () => clearTimeout(t);
+   115→  }, [epoch]);
+   116→  return { cover, failed: !cover && timedOut.epoch === epoch && timedOut.done };
+   117→}
+   118→
+   119→/* ---------- header actions ---------- */
+   120→
+   121→export function LibraryHeaderActions() {
+   122→  const filter = useWB((s) => s.libraryFilter);
+   123→  const setFilter = useWB((s) => s.setLibraryFilter);
+   124→  const search = useWB((s) => s.librarySearch);
+   125→  const setSearch = useWB((s) => s.setLibrarySearch);
+   126→  const importing = useImportingCount();
+   127→  const { open, input } = usePdfPicker((fs) => void importPdfFiles(fs));
+   128→
+   129→  return (
+   130→    <>
+   131→      {input}
+   132→      <div className="lib-search-box">
+   133→        <Search size={14} aria-hidden="true" />
+   134→        <input
+   135→          type="text"
+   136→          value={search}
+   137→          placeholder="Search files…"
+   138→          aria-label="Search files by title, file name or tag"
+   139→          onChange={(e) => setSearch(e.target.value)}
+   140→        />
+   141→        {search && (
+   142→          <button
+   143→            type="button"
+   144→            className="lib-search-clear"
+   145→            title="Clear search"
+   146→            aria-label="Clear search"
+   147→            onClick={() => setSearch('')}
+   148→          >
+   149→            <X size={13} />
+   150→          </button>
+   151→        )}
+   152→      </div>
+   153→      <Seg<LibFilter>
+   154→        className="lib-filter-seg"
+   155→        value={filter}
+   156→        onChange={setFilter}
+   157→        options={FILTER_OPTIONS}
+   158→      />
+   159→      {importing > 0 && (
+   160→        <span className="lib-importing" role="status">
+   161→          <span className="lib-spin" aria-hidden="true" />
+   162→          {importing > 1 ? `Importing ${importing}…` : 'Importing…'}
+   163→        </span>
+   164→      )}
+   165→      <Btn size="sm" variant="primary" onClick={open}>
+   166→        <Upload size={14} /> Add PDF
+   167→      </Btn>
+   168→    </>
+   169→  );
+   170→}
+   171→
+   172→/* ---------- filter + sort ---------- */
+   173→
+   174→function matchesFilter(f: ResourceFile, filter: LibFilter): boolean {
+   175→  if (filter === 'archived') return f.archived;
+   176→  if (f.archived) return false;
+   177→  const pct = wbFileProgress(f);
+   178→  if (filter === 'reading') return pct > 0 && pct < 100;
+   179→  if (filter === 'unread') return pct === 0;
+   180→  if (filter === 'deadline') return !!f.deadline && (wbFileDeadlineStatus(f) !== 'ok' || pct < 100);
+   181→  return true;
+   182→}
+   183→
+   184→/** Folder filter: 'all' | 'unfiled' | folder id. */
+   185→function matchesFolder(f: ResourceFile, folderFilter: string): boolean {
+   186→  if (folderFilter === 'all') return true;
+   187→  if (folderFilter === 'unfiled') return !f.folderId;
+   188→  return f.folderId === folderFilter;
+   189→}
+   190→
+   191→/** Search: case-insensitive substring over title, fileName and tags. */
+   192→function matchesSearch(f: ResourceFile, q: string): boolean {
+   193→  if (!q) return true;
+   194→  return (
+   195→    f.title.toLowerCase().includes(q) ||
+   196→    f.fileName.toLowerCase().includes(q) ||
+   197→    f.tags.some((t) => t.toLowerCase().includes(q))
+   198→  );
+   199→}
+   200→
+   201→function sortFiles(list: ResourceFile[], sort: LibSort): ResourceFile[] {
+   202→  const arr = [...list];
+   203→  if (sort === 'recent') {
+   204→    arr.sort((a, b) => (b.lastReadAt || b.addedAt).localeCompare(a.lastReadAt || a.addedAt));
+   205→  } else if (sort === 'deadline') {
+   206→    arr.sort((a, b) => {
+   207→      if (!a.deadline || !b.deadline) return a.deadline ? -1 : b.deadline ? 1 : 0;
+   208→      return a.deadline.localeCompare(b.deadline);
+   209→    });
+   210→  } else if (sort === 'progress') {
+   211→    arr.sort((a, b) => wbFileProgress(b) - wbFileProgress(a));
+   212→  } else {
+   213→    arr.sort((a, b) => a.title.localeCompare(b.title));
+   214→  }
+   215→  return arr;
+   216→}
+   217→
+   218→/* ---------- folder rail ---------- */
+   219→
+   220→function FolderRail({ creating, setCreating }: { creating: boolean; setCreating: (v: boolean) => void }) {
+   221→  const files = useWB((s) => s.files);
+   222→  const folders = useWB((s) => s.libraryFolders);
+   223→  const folderFilter = useWB((s) => s.libraryFolderFilter);
+   224→  const setFolderFilter = useWB((s) => s.setLibraryFolderFilter);
+   225→  const addFolder = useWB((s) => s.addLibraryFolder);
+   226→  const renameFolder = useWB((s) => s.renameLibraryFolder);
+   227→  const setFolderColor = useWB((s) => s.setLibraryFolderColor);
+   228→  const deleteFolder = useWB((s) => s.deleteLibraryFolder);
+   229→  const moveFile = useWB((s) => s.moveFileToFolder);
+   230→  const confirm = useConfirm();
+   231→
+   232→  const [renameId, setRenameId] = useState<string | null>(null);
+   233→  const [renameText, setRenameText] = useState('');
+   234→  const [createText, setCreateText] = useState('');
+   235→  const [dropId, setDropId] = useState<string | null>(null);
+   236→
+   237→  const unfiledCount = files.filter((f) => !f.folderId).length;
+   238→  const countFor = (folderId: string) => files.filter((f) => f.folderId === folderId).length;
+   239→
+   240→  const chipKey = (e: React.KeyboardEvent, fn: () => void) => {
+   241→    if (e.key === 'Enter' || e.key === ' ') {
+   242→      e.preventDefault();
+   243→      fn();
+   244→    }
+   245→  };
+   246→
+   247→  const finishCreate = (byKeyboard: boolean) => {
+   248→    const name = createText.trim();
+   249→    if (!name) {
+   250→      if (byKeyboard) toast('Folder name required', 'Give the folder a short name.');
+   251→      else {
+   252→        setCreating(false);
+   253→        setCreateText('');
+   254→      }
+   255→      return;
+   256→    }
+   257→    const folder = addFolder(name);
+   258→    setCreateText('');
+   259→    setCreating(false);
+   260→    setFolderFilter(folder.id);
+   261→    toast('Folder created', name);
+   262→  };
+   263→
+   264→  const commitRename = () => {
+   265→    if (!renameId) return;
+   266→    const name = renameText.trim();
+   267→    if (name) renameFolder(renameId, name);
+   268→    setRenameId(null);
+   269→  };
+   270→
+   271→  const cycleColor = (folder: LibraryFolder) => {
+   272→    const i = FOLDER_SWATCHES.indexOf(folder.color);
+   273→    setFolderColor(folder.id, FOLDER_SWATCHES[(i + 1) % FOLDER_SWATCHES.length]);
+   274→  };
+   275→
+   276→  const removeFolder = (folder: LibraryFolder) => {
+   277→    if (!confirm(`Delete folder "${folder.name}"? Files stay in the library, unfiled.`)) return;
+   278→    deleteFolder(folder.id);
+   279→    toast('Folder deleted', folder.name);
+   280→  };
+   281→
+   282→  /* file cards are dragged as text/plain payloads (their file id) */
+   283→  const onChipDragOver = (e: React.DragEvent, folderId: string) => {
+   284→    if (!Array.from(e.dataTransfer.types).includes('text/plain')) return;
+   285→    e.preventDefault();
+   286→    e.dataTransfer.dropEffect = 'move';
+   287→    setDropId(folderId);
+   288→  };
+   289→  const onChipDragLeave = (folderId: string) => {
+   290→    setDropId((cur) => (cur === folderId ? null : cur));
+   291→  };
+   292→  const onChipDrop = (e: React.DragEvent, folder: LibraryFolder) => {
+   293→    if (!Array.from(e.dataTransfer.types).includes('text/plain')) return;
+   294→    e.preventDefault();
+   295→    e.stopPropagation();
+   296→    setDropId(null);
+   297→    const fid = e.dataTransfer.getData('text/plain');
+   298→    if (files.some((f) => f.id === fid)) {
+   299→      moveFile(fid, folder.id);
+   300→      toast('Moved to folder', folder.name);
+   301→    }
+   302→  };
+   303→
+   304→  return (
+   305→    <div className="lib-folder-rail" role="group" aria-label="Library folders">
+   306→      <div
+   307→        role="button"
+   308→        tabIndex={0}
+   309→        aria-pressed={folderFilter === 'all'}
+   310→        className={`lib-folder-chip ${folderFilter === 'all' ? 'active' : ''}`}
+   311→        onClick={() => setFolderFilter('all')}
+   312→        onKeyDown={(e) => chipKey(e, () => setFolderFilter('all'))}
+   313→      >
+   314→        <span className="lib-folder-name">All files</span>
+   315→        <span className="lib-folder-count">{files.length}</span>
+   316→      </div>
+   317→
+   318→      <div
+   319→        role="button"
+   320→        tabIndex={0}
+   321→        aria-pressed={folderFilter === 'unfiled'}
+   322→        className={`lib-folder-chip ${folderFilter === 'unfiled' ? 'active' : ''}`}
+   323→        title="Files not in any folder"
+   324→        onClick={() => setFolderFilter('unfiled')}
+   325→        onKeyDown={(e) => chipKey(e, () => setFolderFilter('unfiled'))}
+   326→      >
+   327→        <span className="lib-folder-name">Unfiled</span>
+   328→        <span className="lib-folder-count">{unfiledCount}</span>
+   329→      </div>
+   330→
+   331→      {folders.map((f) => (
+   332→        <div
+   333→          key={f.id}
+   334→          role="button"
+   335→          tabIndex={0}
+   336→          aria-pressed={folderFilter === f.id}
+   337→          className={`lib-folder-chip ${folderFilter === f.id ? 'active' : ''} ${dropId === f.id ? 'drop' : ''} ${renameId === f.id ? 'renaming' : ''}`}
+   338→          title="Click to filter · double-click name to rename"
+   339→          onClick={() => {
+   340→            if (renameId !== f.id) setFolderFilter(f.id);
+   341→          }}
+   342→          onKeyDown={(e) => {
+   343→            if (renameId === f.id) return;
+   344→            chipKey(e, () => setFolderFilter(f.id));
+   345→          }}
+   346→          onDoubleClick={() => {
+   347→            setCreating(false);
+   348→            setRenameId(f.id);
+   349→            setRenameText(f.name);
+   350→          }}
+   351→          onDragOver={(e) => onChipDragOver(e, f.id)}
+   352→          onDragLeave={() => onChipDragLeave(f.id)}
+   353→          onDrop={(e) => onChipDrop(e, f)}
+   354→        >
+   355→          <span
+   356→            className="lib-folder-dot"
+   357→            style={{ backgroundColor: f.color }}
+   358→            role="button"
+   359→            tabIndex={0}
+   360→            title="Click to change color · double-click name to rename"
+   361→            aria-label={`Change color of folder ${f.name}`}
+   362→            onClick={(e) => {
+   363→              e.stopPropagation();
+   364→              cycleColor(f);
+   365→            }}
+   366→            onDoubleClick={(e) => e.stopPropagation()}
+   367→            onKeyDown={(e) => {
+   368→              if (e.key === 'Enter' || e.key === ' ') {
+   369→                e.preventDefault();
+   370→                e.stopPropagation();
+   371→                cycleColor(f);
+   372→              }
+   373→            }}
+   374→          />
+   375→          {renameId === f.id ? (
+   376→            <input
+   377→              className="lib-folder-input"
+   378→              value={renameText}
+   379→              autoFocus
+   380→              aria-label={`Rename folder ${f.name}`}
+   381→              onChange={(e) => setRenameText(e.target.value)}
+   382→              onClick={(e) => e.stopPropagation()}
+   383→              onDoubleClick={(e) => e.stopPropagation()}
+   384→              onKeyDown={(e) => {
+   385→                if (e.key === 'Enter') commitRename();
+   386→                else if (e.key === 'Escape') setRenameId(null);
+   387→              }}
+   388→              onBlur={commitRename}
+   389→            />
+   390→          ) : (
+   391→            <span className="lib-folder-name">{f.name}</span>
+   392→          )}
+   393→          <span className="lib-folder-count">{countFor(f.id)}</span>
+   394→          <span
+   395→            className="lib-folder-x"
+   396→            role="button"
+   397→            tabIndex={0}
+   398→            title={`Delete folder "${f.name}"`}
+   399→            aria-label={`Delete folder ${f.name}`}
+   400→            onClick={(e) => {
+   401→              e.stopPropagation();
+   402→              removeFolder(f);
+   403→            }}
+   404→            onDoubleClick={(e) => e.stopPropagation()}
+   405→            onKeyDown={(e) => {
+   406→              if (e.key === 'Enter' || e.key === ' ') {
+   407→                e.preventDefault();
+   408→                e.stopPropagation();
+   409→                removeFolder(f);
+   410→              }
+   411→            }}
+   412→          >
+   413→            <X size={11} />
+   414→          </span>
+   415→        </div>
+   416→      ))}
+   417→
+   418→      {creating ? (
+   419→        <input
+   420→          className="lib-folder-input lib-newfolder-input"
+   421→          value={createText}
+   422→          autoFocus
+   423→          placeholder="Folder name…"
+   424→          aria-label="New folder name"
+   425→          onChange={(e) => setCreateText(e.target.value)}
+   426→          onKeyDown={(e) => {
+   427→            if (e.key === 'Enter') finishCreate(true);
+   428→            else if (e.key === 'Escape') {
+   429→              setCreating(false);
+   430→              setCreateText('');
+   431→            }
+   432→          }}
+   433→          onBlur={() => finishCreate(false)}
+   434→        />
+   435→      ) : (
+   436→        <button
+   437→          type="button"
+   438→          className="lib-newfolder-btn"
+   439→          onClick={() => {
+   440→            setRenameId(null);
+   441→            setCreating(true);
+   442→          }}
+   443→        >
+   444→          <FolderPlus size={13} /> New folder
+   445→        </button>
+   446→      )}
+   447→    </div>
+   448→  );
+   449→}
+   450→
+   451→/* ---------- file card ---------- */
+   452→
+   453→function FileCard({ file, linkedCount }: { file: ResourceFile; linkedCount: number }) {
+   454→  const deleteFile = useWB((s) => s.deleteFile);
+   455→  const folders = useWB((s) => s.libraryFolders);
+   456→  const moveFileToFolder = useWB((s) => s.moveFileToFolder);
+   457→  const setFolderFilter = useWB((s) => s.setLibraryFolderFilter);
+   458→  const confirm = useConfirm();
+   459→  const [linking, setLinking] = useState(false);
+   460→  const [dragging, setDragging] = useState(false);
+   461→  const { cover, failed } = useCoverWithFallback(file);
+   462→
+   463→  const folder = folders.find((f) => f.id === file.folderId) ?? null;
+   464→  const favCount = file.favoritePages?.length ?? 0;
+   465→  const annoCount = file.annoPages?.length ?? 0;
+   466→
+   467→  const pct = wbFileProgress(file);
+   468→  const readPages = wbFileReadPages(file);
+   469→  const minutes = wbFileMinutes(file);
+   470→  const st = wbFileDeadlineStatus(file);
+   471→
+   472→  const openReader = () => window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: file.id }));
+   473→  const openEdit = () => window.dispatchEvent(new CustomEvent('wb-open-file-form', { detail: file.id }));
+   474→
+   475→  const move = (folderId: string | null) => {
+   476→    moveFileToFolder(file.id, folderId);
+   477→    const f = folders.find((x) => x.id === folderId);
+   478→    toast(f ? 'Moved to folder' : 'Removed from folder', f ? f.name : file.title);
+   479→  };
+   480→
+   481→  /* the whole card is a drag source (its file id as text/plain) — but never from form controls */
+   482→  const onCardDragStart = (e: React.DragEvent) => {
+   483→    const t = e.target as HTMLElement;
+   484→    if (t.closest('input, textarea, select')) {
+   485→      e.preventDefault();
+   486→      return;
+   487→    }
+   488→    e.dataTransfer.setData('text/plain', file.id);
+   489→    e.dataTransfer.effectAllowed = 'move';
+   490→    setDragging(true);
+   491→  };
+   492→
+   493→  const remove = () => {
+   494→    if (!confirm(`Delete "${file.title}"? Its PDF, cover and reading history will be removed.`)) return;
+   495→    void purgeFileArtifacts(file.id).catch(() => undefined);
+   496→    deleteFile(file.id);
+   497→    toast('Deleted from library', file.title);
+   498→  };
+   499→
+   500→  let dueChip: React.ReactNode = null;
+   501→  if (file.deadline) {
+   502→    const du = daysUntil(file.deadline);
+   503→    const label =
+   504→      pct >= 100 ? 'done'
+   505→        : st === 'over' ? `${Math.abs(du)}d overdue`
+   506→          : du === 0 ? 'due today'
+   507→            : `${du}d left`;
+   508→    const cls =
+   509→      pct >= 100 ? 'chip-done'
+   510→        : st === 'over' ? 'chip-over'
+   511→          : st === 'soon' ? 'chip-soon'
+   512→            : 'chip-ok';
+   513→    dueChip = <span className={`chip ${cls}`}>{label}</span>;
+   514→  }
+   515→
+   516→  return (
+   517→    <article
+   518→      className={`lib-card ${file.archived ? 'archived' : ''} ${linking ? 'linking' : ''} ${dragging ? 'dragging' : ''}`}
+   519→      draggable
+   520→      onDragStart={onCardDragStart}
+   521→      onDragEnd={() => setDragging(false)}
+   522→    >
+   523→      <div
+   524→        className="lib-cover"
+   525→        role="button"
+   526→        tabIndex={0}
+   527→        aria-label={`Open "${file.title}" in the reader`}
+   528→        onClick={openReader}
+   529→        onKeyDown={(e) => {
+   530→          if (e.key === 'Enter' || e.key === ' ') {
+   531→            e.preventDefault();
+   532→            openReader();
+   533→          }
+   534→        }}
+   535→      >
+   536→        {cover ? (
+   537→          <img className="lib-cover-img" src={cover} alt="" loading="lazy" />
+   538→        ) : failed ? (
+   539→          <div className="lib-cover-fallback" aria-hidden="true">
+   540→            <FileText />
+   541→          </div>
+   542→        ) : (
+   543→          <div className="lib-cover-skel" aria-hidden="true" />
+   544→        )}
+   545→        <span className="lib-page-badge mono" title="Current reading position">
+   546→          p.{file.currentPage}/{file.pageCount}
+   547→        </span>
+   548→      </div>
+   549→
+   550→      <div className="lib-body">
+   551→        <div
+   552→          className="lib-title"
+   553→          role="button"
+   554→          tabIndex={0}
+   555→          title={`${file.title} — click to edit`}
+   556→          onClick={openEdit}
+   557→          onKeyDown={(e) => {
+   558→            if (e.key === 'Enter' || e.key === ' ') {
+   559→              e.preventDefault();
+   560→              openEdit();
+   561→            }
+   562→          }}
+   563→        >
+   564→          {file.title}
+   565→        </div>
+   566→
+   567→        <div className="lib-chips">
+   568→          {dueChip}
+   569→          {file.archived && <span className="chip chip-ok">archived</span>}
+   570→          {folder && (
+   571→            <button
+   572→              type="button"
+   573→              className="lib-card-folder"
+   574→              title={`In folder "${folder.name}" — click to filter`}
+   575→              onClick={() => setFolderFilter(folder.id)}
+   576→            >
+   577→              <span className="lib-folder-dot-sm" style={{ background: folder.color }} />
+   578→              <span className="lib-folder-name">{folder.name}</span>
+   579→            </button>
+   580→          )}
+   581→          {favCount > 0 && (
+   582→            <span className="lib-fav-chip" title="favorite pages">
+   583→              <Star size={10} /> {favCount}
+   584→            </span>
+   585→          )}
+   586→          {annoCount > 0 && (
+   587→            <span className="lib-fav-chip anno" title="annotated pages">
+   588→              <PenLine size={10} /> {annoCount}
+   589→            </span>
+   590→          )}
+   591→          {linkedCount > 0 && (
+   592→            <span className="lib-tag" title="Linked goals & tasks">
+   593→              <Link2 size={10} /> {linkedCount}
+   594→            </span>
+   595→          )}
+   596→        </div>
+   597→
+   598→        <div className="lib-progress" title={`${readPages} of ${file.pageCount} pages read`}>
+   599→          <span className="pbar">
+   600→            <span style={{ width: `${pct}%` }} />
+   601→          </span>
+   602→          <span className="mono lib-progress-num">
+   603→            {pct}% · {readPages}/{file.pageCount}p
+   604→          </span>
+   605→        </div>
+   606→
+   607→        <div className="lib-meta">
+   608→          <span className="lib-time mono" title="Total time spent in this file">
+   609→            <Clock size={11} /> {fmtDuration(minutes)}
+   610→          </span>
+   611→          {file.tags.slice(0, 3).map((t) => (
+   612→            <span key={t} className="lib-tag">
+   613→              {t}
+   614→            </span>
+   615→          ))}
+   616→          {file.tags.length > 3 && (
+   617→            <span className="lib-tag" title={file.tags.slice(3).join(', ')}>
+   618→              +{file.tags.length - 3}
+   619→            </span>
+   620→          )}
+   621→        </div>
+   622→
+   623→        <div className="lib-actions">
+   624→          <Btn size="sm" variant="primary" onClick={openReader}>
+   625→            <BookOpen size={13} /> Read
+   626→          </Btn>
+   627→          <Btn size="sm" variant="ghost" onClick={openEdit}>
+   628→            <Pencil size={13} /> Edit
+   629→          </Btn>
+   630→          <Btn size="sm" variant="ghost" onClick={() => setLinking((v) => !v)} aria-expanded={linking}>
+   631→            <Link2 size={13} /> Link
+   632→          </Btn>
+   633→          <Btn size="sm" variant="danger" onClick={remove}>
+   634→            <Trash2 size={13} /> Delete
+   635→          </Btn>
+   636→          <label className="lib-move" title="Move to folder">
+   637→            <FolderInput size={12} />
+   638→            <select
+   639→              className="lib-move-select"
+   640→              aria-label={`Move "${file.title}" to folder`}
+   641→              value={file.folderId ?? ''}
+   642→              onChange={(e) => move(e.target.value || null)}
+   643→            >
+   644→              <option value="">No folder</option>
+   645→              {folders.map((f) => (
+   646→                <option key={f.id} value={f.id}>
+   647→                  {f.name}
+   648→                </option>
+   649→              ))}
+   650→            </select>
+   651→          </label>
+   652→        </div>
+   653→
+   654→        {linking && <LinkPicker file={file} onDone={() => setLinking(false)} />}
+   655→      </div>
+   656→    </article>
+   657→  );
+   658→}
+   659→
+   660→/* ---------- inline linker (goals & tasks ↔ file) ---------- */
+   661→
+   662→function LinkPicker({ file, onDone }: { file: ResourceFile; onDone: () => void }) {
+   663→  const items = useWB((s) => s.items);
+   664→  const toggleItemFile = useWB((s) => s.toggleItemFile);
+   665→  const [q, setQ] = useState('');
+   666→
+   667→  const linkedIds = new Set(wbItemsForFile(items, file.id).map((i) => i.id));
+   668→  const query = q.trim().toLowerCase();
+   669→  const candidates = items
+   670→    .filter((i) => i.status !== 'archived' && (!query || i.title.toLowerCase().includes(query)))
+   671→    .sort((a, b) => {
+   672→      const la = linkedIds.has(a.id) ? 0 : 1;
+   673→      const lb = linkedIds.has(b.id) ? 0 : 1;
+   674→      return la - lb || a.title.localeCompare(b.title);
+   675→    })
+   676→    .slice(0, 60);
+   677→
+   678→  return (
+   679→    <div className="lib-linkpicker">
+   680→      <div className="lib-link-head">
+   681→        <Search size={13} />
+   682→        <input
+   683→          autoFocus
+   684→          value={q}
+   685→          onChange={(e) => setQ(e.target.value)}
+   686→          placeholder="Link to a goal or task…"
+   687→          aria-label="Search goals and tasks to link"
+   688→        />
+   689→        <IconBtn small title="Close linker" onClick={onDone}>
+   690→          <X size={13} />
+   691→        </IconBtn>
+   692→      </div>
+   693→      <div className="lib-link-list">
+   694→        {candidates.map((i) => {
+   695→          const isLinked = linkedIds.has(i.id);
+   696→          return (
+   697→            <button
+   698→              key={i.id}
+   699→              type="button"
+   700→              className={`lib-link-row ${isLinked ? 'linked' : ''}`}
+   701→              aria-pressed={isLinked}
+   702→              onClick={() => {
+   703→                toggleItemFile(i.id, file.id);
+   704→                toast(isLinked ? 'Unlinked from item' : 'Linked to item', i.title);
+   705→              }}
+   706→            >
+   707→              <span className="lib-link-check">{isLinked && <Check size={12} />}</span>
+   708→              <span className="lib-link-title">{i.title}</span>
+   709→              <span className="lib-link-type">{i.type}</span>
+   710→            </button>
+   711→          );
+   712→        })}
+   713→        {!candidates.length && <div className="lib-link-empty">No matching goals or tasks.</div>}
+   714→      </div>
+   715→    </div>
+   716→  );
+   717→}
+   718→
+   719→/* ---------- main view ---------- */
+   720→
+   721→export function LibraryView() {
+   722→  const files = useWB((s) => s.files);
+   723→  const items = useWB((s) => s.items);
+   724→  const sessions = useWB((s) => s.readingSessions);
+   725→  const filter = useWB((s) => s.libraryFilter);
+   726→  const setFilter = useWB((s) => s.setLibraryFilter);
+   727→  const folders = useWB((s) => s.libraryFolders);
+   728→  const folderFilter = useWB((s) => s.libraryFolderFilter);
+   729→  const setFolderFilter = useWB((s) => s.setLibraryFolderFilter);
+   730→  const search = useWB((s) => s.librarySearch);
+   731→  const setSearch = useWB((s) => s.setLibrarySearch);
+   732→  const [sort, setSort] = useState<LibSort>('recent');
+   733→  const [dragOver, setDragOver] = useState(false);
+   734→  const [creating, setCreating] = useState(false);
+   735→  const { open, input } = usePdfPicker((fs) => void importPdfFiles(fs));
+   736→
+   737→  /* week window (Monday-based) */
+   738→  const weekFrom = startOfWeekStr();
+   739→  const today = todayStr();
+   740→  const weekSessions = useMemo(
+   741→    () => sessions.filter((r) => r.date >= weekFrom && r.date <= today),
+   742→    [sessions, weekFrom, today]
+   743→  );
+   744→  const minutesWeek = wbReadingMinutesInRange(sessions, weekFrom, today);
+   745→  const pagesWeek = wbReadingPagesInRange(sessions, weekFrom, today);
+   746→  const visitedWeek = weekSessions.reduce((s, r) => s + r.pagesVisited, 0);
+   747→
+   748→  /* shelf aggregates */
+   749→  const totalPages = files.reduce((s, f) => s + f.pageCount, 0);
+   750→  const totalSeconds = files.reduce((s, f) => s + wbFileSeconds(f), 0);
+   751→  const visitedPagesAll = files.reduce(
+   752→    (s, f) => s + Object.values(f.pageSeconds || {}).filter((v) => v > 0).length,
+   753→    0
+   754→  );
+   755→  const filesWithTime = files.filter((f) => wbFileSeconds(f) > 0).length;
+   756→  const avgSec = visitedPagesAll ? Math.round(totalSeconds / visitedPagesAll) : 0;
+   757→
+   758→  const query = search.trim();
+   759→  const q = query.toLowerCase();
+   760→  const visible = useMemo(
+   761→    () =>
+   762→      sortFiles(
+   763→        files.filter((f) => matchesFilter(f, filter) && matchesFolder(f, folderFilter) && matchesSearch(f, q)),
+   764→        sort
+   765→      ),
+   766→    [files, filter, folderFilter, q, sort]
+   767→  );
+   768→
+   769→  /* drag & drop of PDFs onto the shelf */
+   770→  const onDragOver = (e: React.DragEvent) => {
+   771→    if (!Array.from(e.dataTransfer.types).includes('Files')) return;
+   772→    e.preventDefault();
+   773→    e.dataTransfer.dropEffect = 'copy';
+   774→    setDragOver(true);
+   775→  };
+   776→  const onDragLeave = (e: React.DragEvent) => {
+   777→    if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget as Node)) return;
+   778→    setDragOver(false);
+   779→  };
+   780→  const onDrop = (e: React.DragEvent) => {
+   781→    e.preventDefault();
+   782→    setDragOver(false);
+   783→    const pdfs = Array.from(e.dataTransfer.files).filter(
+   784→      (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
+   785→    );
+   786→    if (pdfs.length) void importPdfFiles(pdfs);
+   787→    else toast('PDFs only', 'Drop PDF files to add them to the library.');
+   788→  };
+   789→
+   790→  if (!files.length) {
+   791→    return (
+   792→      <div className="fade-in">
+   793→        <div
+   794→          className={`lib-dropwrap ${dragOver ? 'drop' : ''}`}
+   795→          onDragOver={onDragOver}
+   796→          onDragLeave={onDragLeave}
+   797→          onDrop={onDrop}
+   798→        >
+   799→          <div className="empty-state">
+   800→            <div className="es-title">No PDFs yet</div>
+   801→            Add PDFs to your shelf — covers are rendered automatically, deadlines count down on every
+   802→            card, and time spent on each page is tracked while you read.
+   803→            <div style={{ marginTop: 12 }}>
+   804→              <Btn variant="primary" onClick={open}>
+   805→                <Upload size={15} /> Add PDF
+   806→              </Btn>
+   807→            </div>
+   808→            <div className="lib-drop-hint">…or drag &amp; drop PDF files onto the shelf</div>
+   809→          </div>
+   810→        </div>
+   811→        {input}
+   812→      </div>
+   813→    );
+   814→  }
+   815→
+   816→  const filterLabel = FILTER_OPTIONS.find((o) => o.id === filter)?.label ?? 'this filter';
+   817→
+   818→  return (
+   819→    <div className="fade-in">
+   820→      <FolderRail creating={creating} setCreating={setCreating} />
+   821→
+   822→      <div className="grid-cards">
+   823→        <div className="stat-card">
+   824→          <div className="stat-label">Files</div>
+   825→          <div className="stat-value">{files.length}</div>
+   826→          <div className="stat-note">
+   827→            {totalPages.toLocaleString()} pages on the shelf
+   828→            {folders.length > 0 ? ` · ${folders.length} folder${folders.length === 1 ? '' : 's'}` : ''}
+   829→          </div>
+   830→        </div>
+   831→        <div className="stat-card">
+   832→          <div className="stat-label">Reading this week</div>
+   833→          <div className="stat-value">{fmtDuration(minutesWeek)}</div>
+   834→          <div className="stat-note">{pagesWeek} pages</div>
+   835→        </div>
+   836→        <div className="stat-card">
+   837→          <div className="stat-label">Pages read this week</div>
+   838→          <div className="stat-value">{pagesWeek}</div>
+   839→          <div className="stat-note">{visitedWeek} visited</div>
+   840→        </div>
+   841→        <div className="stat-card">
+   842→          <div className="stat-label">Avg / visited page</div>
+   843→          <div className="stat-value">{visitedPagesAll ? `${avgSec}s` : '—'}</div>
+   844→          <div className="stat-note">
+   845→            weighted across {filesWithTime} file{filesWithTime === 1 ? '' : 's'}
+   846→          </div>
+   847→        </div>
+   848→      </div>
+   849→
+   850→      <div className="lib-toolbar">
+   851→        {q ? (
+   852→          <>
+   853→            <span className="lib-count">
+   854→              {visible.length} {visible.length === 1 ? 'result' : 'results'} for “{query}”
+   855→            </span>
+   856→            <IconBtn small title="Clear search" onClick={() => setSearch('')}>
+   857→              <X size={13} />
+   858→            </IconBtn>
+   859→          </>
+   860→        ) : (
+   861→          <span className="lib-count">
+   862→            {visible.length} {visible.length === 1 ? 'file' : 'files'}
+   863→            {filter !== 'all' || folderFilter !== 'all' ? ` of ${files.length}` : ''}
+   864→          </span>
+   865→        )}
+   866→        {!creating && (
+   867→          <Btn size="sm" variant="ghost" onClick={() => setCreating(true)}>
+   868→            <FolderPlus size={13} /> New folder
+   869→          </Btn>
+   870→        )}
+   871→        <label className="lib-sort">
+   872→          <span>Sort</span>
+   873→          <select
+   874→            value={sort}
+   875→            aria-label="Sort files"
+   876→            onChange={(e) => setSort(e.target.value as LibSort)}
+   877→          >
+   878→            <option value="recent">Recent</option>
+   879→            <option value="deadline">Deadline</option>
+   880→            <option value="progress">Progress</option>
+   881→            <option value="title">Title</option>
+   882→          </select>
+   883→        </label>
+   884→      </div>
+   885→
+   886→      <div
+   887→        className={`lib-dropwrap ${dragOver ? 'drop' : ''}`}
+   888→        onDragOver={onDragOver}
+   889→        onDragLeave={onDragLeave}
+   890→        onDrop={onDrop}
+   891→      >
+   892→        {visible.length ? (
+   893→          <div className="lib-grid">
+   894→            {visible.map((f) => (
+   895→              <FileCard key={f.id} file={f} linkedCount={wbItemsForFile(items, f.id).length} />
+   896→            ))}
+   897→          </div>
+   898→        ) : q ? (
+   899→          <div className="empty-state">
+   900→            <div className="es-title">No files match “{query}”</div>
+   901→            Try a different search, or clear it to browse the whole shelf.
+   902→            <div style={{ marginTop: 12 }}>
+   903→              <Btn size="sm" onClick={() => setSearch('')}>Clear search</Btn>
+   904→            </div>
+   905→          </div>
+   906→        ) : folderFilter !== 'all' ? (
+   907→          <div className="empty-state">
+   908→            <div className="es-title">
+   909→              {folderFilter === 'unfiled' ? 'No unfiled files' : 'This folder is empty'}
+   910→            </div>
+   911→            {folderFilter === 'unfiled'
+   912→              ? 'Every file on the shelf lives in a folder.'
+   913→              : 'Drag a file card onto the folder chip, or use Move on a card.'}
+   914→            <div style={{ marginTop: 12 }}>
+   915→              <Btn size="sm" onClick={() => setFolderFilter('all')}>Show all files</Btn>
+   916→            </div>
+   917→          </div>
+   918→        ) : (
+   919→          <div className="empty-state">
+   920→            <div className="es-title">Nothing in “{filterLabel}”</div>
+   921→            No files match this filter yet.
+   922→            <div style={{ marginTop: 12 }}>
+   923→              <Btn size="sm" onClick={() => setFilter('all')}>
+   924→                Show all files
+   925→              </Btn>
+   926→            </div>
+   927→          </div>
+   928→        )}
+   929→        {input}
+   930→      </div>
+   931→    </div>
+   932→  );
+   933→}
+   934→

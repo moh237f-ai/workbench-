@@ -4,6 +4,7 @@
 import React, { useState } from 'react';
 import { Play, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { useWB } from '@/lib/workbench/store';
+import type { Entry } from '@/lib/workbench/types';
 import { fmtDateNice, fmtDuration, todayStr } from '@/lib/workbench/helpers';
 import { Btn, IconBtn, toast } from '../ui/primitives';
 import { useViewActions } from './viewCtx';
@@ -134,7 +135,11 @@ export function TimerWidget() {
 
 /* ---------- Log view ---------- */
 
-export function LogView() {
+/** The full activity log.
+ *  `embedded` trims the page-level chrome (used inside the Reports collapsible):
+ *  the timer card keeps working, the header row shrinks to a compact toolbar,
+ *  and the day list scrolls inside a fixed-height container. */
+export function LogView({ embedded = false }: { embedded?: boolean }) {
   const entries = useWB((s) => s.entries);
   const labels = useWB((s) => s.labels);
   const items = useWB((s) => s.items);
@@ -145,7 +150,7 @@ export function LogView() {
     (b.date + (b.startTime || '00:00')).localeCompare(a.date + (a.startTime || '00:00'))
   );
 
-  const byDay: { date: string; ents: typeof sorted }[] = [];
+  const byDay: { date: string; ents: Entry[] }[] = [];
   sorted.forEach((e) => {
     const last = byDay[byDay.length - 1];
     if (last && last.date === e.date) last.ents.push(e);
@@ -153,84 +158,98 @@ export function LogView() {
   });
 
   return (
-    <div className="fade-in">
-      <div className="card" style={{ marginBottom: 16 }}>
+    <div className={embedded ? 'log-embedded' : 'fade-in'}>
+      <div className="card no-print" style={{ marginBottom: embedded ? 12 : 16 }}>
         <TimerWidget />
       </div>
 
-      <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span>Entries · {entries.length}</span>
-        <Btn size="sm" variant="ghost" onClick={openLabels}>
-          Manage labels
-        </Btn>
-      </div>
-
-      {!byDay.length ? (
-        <div className="empty-state">
-          <div className="es-title">No entries yet</div>
-          Start a timer or log time manually.
+      {embedded ? (
+        <div className="log-embedded-head no-print">
+          <span className="log-embedded-sub">
+            Newest first · {entries.length} {entries.length === 1 ? 'entry' : 'entries'}
+          </span>
+          <Btn size="sm" variant="ghost" onClick={openLabels}>
+            Manage labels
+          </Btn>
         </div>
       ) : (
-        byDay.map((day) => {
-          const total = day.ents.reduce((s, e) => s + e.durationMin, 0);
-          return (
-            <div key={day.date} style={{ marginBottom: 6 }}>
-              <div className="day-group-heading">
-                {day.date === todayStr() ? 'Today' : fmtDateNice(day.date)}
-                <span className="dgh-total">{fmtDuration(total)}</span>
-              </div>
-              <div className="card" style={{ padding: '2px 16px' }}>
-                {day.ents.map((e) => {
-                  const eLabels = e.labelIds
-                    .map((id) => labels.find((l) => l.id === id))
-                    .filter(Boolean);
-                  const eItems = e.itemIds
-                    .map((id) => items.find((i) => i.id === id))
-                    .filter(Boolean);
-                  const timeStr = e.startTime && e.endTime ? `${e.startTime}–${e.endTime}` : 'manual';
-                  return (
-                    <div key={e.id} className="entry-row">
-                      <div className="entry-time">
-                        {timeStr}
-                        <div style={{ fontWeight: 700, color: 'var(--muted2)', marginTop: 2 }}>{fmtDuration(e.durationMin)}</div>
-                      </div>
-                      <div className="entry-body">
-                        {(eLabels.length > 0 || eItems.length > 0) && (
-                          <div className="entry-labels">
-                            {eLabels.map((l) => (
-                              <span key={l!.id} className="chip label-chip" style={{ background: `${l!.color}22`, color: l!.color }}>
-                                <span className="chip-dot" style={{ background: l!.color }} />
-                                {l!.name}
-                              </span>
-                            ))}
-                            {eItems.map((it) => (
-                              <span key={it!.id} className="chip chip-ok">{it!.title}</span>
-                            ))}
-                          </div>
-                        )}
-                        {e.note && <div className="entry-note">{e.note}</div>}
-                      </div>
-                      <IconBtn
-                        danger
-                        small
-                        title="Delete entry"
-                        onClick={() => {
-                          if (confirm('Delete this entry?')) {
-                            deleteEntry(e.id);
-                            toast('Entry deleted');
-                          }
-                        }}
-                      >
-                        <Trash2 size={14} />
-                      </IconBtn>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })
+        <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span>Entries · {entries.length}</span>
+          <Btn size="sm" variant="ghost" onClick={openLabels}>
+            Manage labels
+          </Btn>
+        </div>
       )}
+
+      <div className={embedded ? 'report-log-scroll' : undefined}>
+        {!byDay.length ? (
+          <div className="empty-state">
+            <div className="es-title">No entries yet</div>
+            Start a timer or log time manually.
+          </div>
+        ) : (
+          byDay.map((day) => {
+            const total = day.ents.reduce((s, e) => s + e.durationMin, 0);
+            return (
+              <div key={day.date} style={{ marginBottom: 6 }}>
+                <div className="day-group-heading">
+                  {day.date === todayStr() ? 'Today' : fmtDateNice(day.date)}
+                  <span className="dgh-total">{fmtDuration(total)}</span>
+                </div>
+                <div className="card" style={{ padding: '2px 16px' }}>
+                  {day.ents.map((e) => {
+                    const eLabels = e.labelIds
+                      .map((id) => labels.find((l) => l.id === id))
+                      .filter(Boolean);
+                    const eItems = e.itemIds
+                      .map((id) => items.find((i) => i.id === id))
+                      .filter(Boolean);
+                    const timeStr = e.startTime && e.endTime ? `${e.startTime}–${e.endTime}` : 'manual';
+                    return (
+                      <div key={e.id} className="entry-row">
+                        <div className="entry-time">
+                          {timeStr}
+                          <div style={{ fontWeight: 700, color: 'var(--muted2)', marginTop: 2 }}>{fmtDuration(e.durationMin)}</div>
+                        </div>
+                        <div className="entry-body">
+                          {(eLabels.length > 0 || eItems.length > 0) && (
+                            <div className="entry-labels">
+                              {eLabels.map((l) => (
+                                <span key={l!.id} className="chip label-chip" style={{ background: `${l!.color}22`, color: l!.color }}>
+                                  <span className="chip-dot" style={{ background: l!.color }} />
+                                  {l!.name}
+                                </span>
+                              ))}
+                              {eItems.map((it) => (
+                                <span key={it!.id} className="chip chip-ok">{it!.title}</span>
+                              ))}
+                            </div>
+                          )}
+                          {e.note && <div className="entry-note">{e.note}</div>}
+                        </div>
+                        <IconBtn
+                          danger
+                          small
+                          className="no-print"
+                          title="Delete entry"
+                          onClick={() => {
+                            if (confirm('Delete this entry?')) {
+                              deleteEntry(e.id);
+                              toast('Entry deleted');
+                            }
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </IconBtn>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }

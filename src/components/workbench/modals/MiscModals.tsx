@@ -3,13 +3,15 @@
 
 import React, { useMemo, useState } from 'react';
 import {
-  Plus, Trash2, Check, Download, Upload, CalendarDays, Sparkles, Pencil, Flame,
+  Plus, Trash2, Check, Download, Upload, CalendarDays, Sparkles, Pencil, Flame, Zap, Clock, Minus,
 } from 'lucide-react';
 import { useWB, wbIsBlocked, wbPlannedItems, wbPlannedMinutes, wbPriorityWeight, wbReadyItems } from '@/lib/workbench/store';
 import {
-  buildICS, fmtDateNice, fmtDuration, isoDate, parseCapture, parseICS, priorityLabel, todayStr,
+  buildICS, daysUntil, fmtDateNice, fmtDuration, isoDate, parseCapture, parseICS, priorityLabel, todayStr,
 } from '@/lib/workbench/helpers';
-import { Btn, Modal, toast } from '../ui/primitives';
+import { Btn, IconBtn, Modal, toast } from '../ui/primitives';
+import { DateField } from '../ui/DateField';
+import { dateToShamsi, formatShamsi } from '@/lib/workbench/shamsi';
 
 /* ---------- Labels manager ---------- */
 
@@ -114,6 +116,7 @@ export function LabelsModal({ open, onClose }: { open: boolean; onClose: () => v
 export function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const rows: [string[], string][] = [
     [['F'], 'Open / focus mode'],
+    [['B'], 'Focus mode — cycle atmosphere'],
     [['⌘', 'K'], 'Command palette & search'],
     [['C'], 'Quick capture'],
     [['T'], 'Start / stop quick timer'],
@@ -126,6 +129,11 @@ export function ShortcutsModal({ open, onClose }: { open: boolean; onClose: () =
     [['Ctrl', 'Shift', 'Z'], 'Redo'],
     [['Ctrl', 'J'], 'Cycle theme'],
     [['Esc'], 'Exit focus / close dialog'],
+    [['S'], 'Reader — single / continuous page'],
+    [['P'], 'Reader — pages panel & filters'],
+    [['F'], 'Reader — star this page'],
+    [['T'], 'Reader — page theme (light/dark/warm)'],
+    [['+/−'], 'Reader — zoom in / out'],
   ];
   return (
     <Modal
@@ -432,7 +440,7 @@ export function TimeboxModal({
     >
       <div className="field">
         <label htmlFor="tb-date">Day</label>
-        <input id="tb-date" type="date" value={day} onChange={(e) => setDay(e.target.value)} />
+        <DateField id="tb-date" value={day} onChange={setDay} label="Day" placeholder="Pick a day" compact />
       </div>
       <div className="field-row">
         <div className="field">
@@ -543,117 +551,289 @@ export function DayPlannerModal({ date, onClose, onTimebox }: { date: string; on
   );
 }
 
-/* ---------- Daily plan (capacity) ---------- */
+/* ---------- Daily plan (capacity + auto-fill + suggestions) ---------- */
+
+/* urgency rank: overdue first, then soonest deadline, no-deadline last */
+function deadlineRank(deadline: string | null, today: string): number {
+  if (!deadline) return 9e9;
+  return daysUntil(deadline);
+}
 
 export function DailyPlanModal({ onClose }: { onClose: () => void }) {
   const items = useWB((s) => s.items);
+  const files = useWB((s) => s.files);
   const dailyCapacityMin = useWB((s) => s.dailyCapacityMin);
   const setDailyCapacity = useWB((s) => s.setDailyCapacity);
   const updateItem = useWB((s) => s.updateItem);
 
   const today = todayStr();
+  const shamsi = dateToShamsi(new Date());
   const planned = wbPlannedItems(items, today);
   const used = wbPlannedMinutes(items, today);
   const cap = dailyCapacityMin || 240;
-  const ready = wbReadyItems(items).filter((i) => i.type === 'task' && !i.startDate);
-  const [capacity, setCapacity] = useState(String(cap));
+
+  /* hours/minutes steppers — any capacity like 5h 30m */
+  const [capH, setCapH] = useState(Math.floor(cap / 60));
+  const [capM, setCapM] = useState(cap % 60);
+  const capLive = Math.max(15, capH * 60 + capM);
+
+  /* ready tasks, ranked: deadline urgency → priority → oldest update */
+  const ready = useMemo(
+    () =>
+      wbReadyItems(items)
+        .filter((i) => i.type === 'task' && !i.startDate)
+        .slice()
+        .sort((a, b) => {
+          const da = deadlineRank(a.deadline, today);
+          const db = deadlineRank(b.deadline, today);
+          if (da !== db) return da - db;
+          const p = wbPriorityWeight(a.priority) - wbPriorityWeight(b.priority);
+          if (p) return p;
+          return (a.updatedAt || '').localeCompare(b.updatedAt || '');
+        }),
+    [items, today]
+  );
+
+  /* reading files with deadlines that are unfinished — surfaced as suggestions too */
+  const urgentFiles = files
+    .filter((f) => !f.archived && f.deadline && f.deadline >= today)
+    .sort((a, b) => (a.deadline || '').localeCompare(b.deadline || ''))
+    .slice(0, 3);
+
+  const clampNum = (v: string, min: number, max: number) =>
+    Math.max(min, Math.min(max, Number(v) || 0));
+
+  const applyCapacity = (h: number, m: number) => {
+    setCapH(h);
+    setCapM(m);
+    setDailyCapacity(Math.max(15, h * 60 + m));
+  };
+
+  const autoFill = () => {
+    let total = used;
+    let added = 0;
+    const c = Math.max(15, capH * 60 + capM);
+    ready.forEach((i) => {
+      const m = Number(i.estimateMin) || 30;
+      if (total + m <= c) {
+        updateItem(i.id, { startDate: today, status: i.status === 'inbox' ? 'todo' : i.status });
+        total += m;
+        added++;
+      }
+    });
+    if (added === 0) {
+      toast('Nothing to add', `Capacity is already ${fmtDuration(Math.max(0, c - used))} full or no ready tasks fit.`);
+    } else {
+      toast(
+        `Plan auto-filled · ${added} task${added === 1 ? '' : 's'}`,
+        `${fmtDuration(Math.min(total, c))} of ${fmtDuration(c)} capacity · deadline-urgency order`
+      );
+    }
+  };
+
+  const steppers = (
+    <div className="cap-steppers" role="group" aria-label="Daily capacity in hours and minutes">
+      <div className="cap-step">
+        <IconBtn small title="Less hours" aria-label="Less hours" onClick={() => applyCapacity(Math.max(0, capH - 1), capM)}>
+          <Minus size={13} />
+        </IconBtn>
+        <label className="cap-step-in">
+          <input
+            type="number"
+            min={0}
+            max={16}
+            value={capH}
+            aria-label="Capacity hours"
+            onChange={(e) => applyCapacity(clampNum(e.target.value, 0, 16), capM)}
+          />
+          <span>h</span>
+        </label>
+        <IconBtn small title="More hours" aria-label="More hours" onClick={() => applyCapacity(Math.min(16, capH + 1), capM)}>
+          <Plus size={13} />
+        </IconBtn>
+      </div>
+      <div className="cap-step">
+        <IconBtn small title="Less minutes" aria-label="Less minutes" onClick={() => applyCapacity(capH, Math.max(0, capM - 15))}>
+          <Minus size={13} />
+        </IconBtn>
+        <label className="cap-step-in">
+          <input
+            type="number"
+            min={0}
+            max={59}
+            step={5}
+            value={capM}
+            aria-label="Capacity minutes"
+            onChange={(e) => applyCapacity(capH, clampNum(e.target.value, 0, 59))}
+          />
+          <span>m</span>
+        </label>
+        <IconBtn small title="More minutes" aria-label="More minutes" onClick={() => applyCapacity(capH, Math.min(59, capM + 15))}>
+          <Plus size={13} />
+        </IconBtn>
+      </div>
+    </div>
+  );
+
+  const pct = Math.min(100, Math.round((used / Math.max(1, capLive)) * 100));
 
   return (
     <Modal
       open
-      onClose={onClose}
+      onClose={() => {
+        setDailyCapacity(capLive);
+        onClose();
+      }}
       title="Plan today"
       wide
       footer={
         <>
-          <Btn
-            onClick={() => {
-              // auto-fill: add ready tasks by priority until capacity
-              let total = used;
-              const c = Number(capacity) || 240;
-              ready
-                .slice()
-                .sort((a, b) => wbPriorityWeight(a.priority) - wbPriorityWeight(b.priority))
-                .forEach((i) => {
-                  const m = Number(i.estimateMin) || 30;
-                  if (total + m <= c) {
-                    updateItem(i.id, { startDate: today, status: i.status === 'inbox' ? 'todo' : i.status });
-                    total += m;
-                  }
-                });
-              toast('Plan auto-filled', `${fmtDuration(Math.min(total, c))} of ${fmtDuration(c)} capacity`);
-            }}
-          >
-            Auto-fill capacity
+          <Btn onClick={autoFill}>
+            <Zap size={15} /> Auto-fill capacity
           </Btn>
           <span className="spacer" />
-          <Btn variant="primary" onClick={() => { setDailyCapacity(Number(capacity) || 240); onClose(); }}>
+          <Btn variant="primary" onClick={() => {
+            setDailyCapacity(capLive);
+            onClose();
+          }}>
             <Check size={15} /> Done
           </Btn>
         </>
       }
     >
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
-        <div>
-          <div style={{ fontWeight: 650 }}>Today&apos;s capacity</div>
-          <div className="field-help">Keep the plan below what you can realistically finish.</div>
+      {/* capacity header */}
+      <div className="dp-head">
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ fontWeight: 650, display: 'flex', alignItems: 'center', gap: 8 }}>
+            Today&apos;s capacity
+            <span className="chip chip-ok mono" style={{ fontSize: 10 }}>{formatShamsi(shamsi, true)}</span>
+          </div>
+          <div className="field-help">Any value works — e.g. 5h 30m. Keep the plan slightly under it.</div>
+          <div className="cap-quick">
+            {[120, 240, 300, 330, 360, 420, 480].map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={`cap-chip ${capLive === m ? 'active' : ''}`}
+                onClick={() => applyCapacity(Math.floor(m / 60), m % 60)}
+              >
+                {fmtDuration(m)}
+              </button>
+            ))}
+          </div>
         </div>
-        <select value={capacity} onChange={(e) => setCapacity(e.target.value)} style={{ minWidth: 120 }}>
-          {[120, 180, 240, 300, 360, 420, 480].map((m) => (
-            <option key={m} value={m}>{fmtDuration(m)}</option>
-          ))}
-        </select>
+        {steppers}
       </div>
-      <div className={`capacity-track ${used > cap ? 'over' : ''}`}>
-        <span style={{ width: `${Math.min(100, (used / cap) * 100)}%` }} />
+      <div className={`capacity-track ${used > capLive ? 'over' : ''}`}>
+        <span style={{ width: `${pct}%` }} />
       </div>
       <div className="field-help" style={{ margin: '6px 0 16px' }}>
-        Planned {fmtDuration(used)} · {fmtDuration(Math.max(0, cap - used))} remaining
+        Planned {fmtDuration(used)} · {fmtDuration(Math.max(0, capLive - used))} remaining
+        {used > capLive ? ` · ${fmtDuration(used - capLive)} over capacity` : ''}
       </div>
 
+      {/* planned today */}
       <div className="section-title" style={{ marginTop: 0 }}>Planned today · {planned.length}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16, maxHeight: 240, overflowY: 'auto', paddingRight: 4 }}>
         {planned.length ? (
-          planned.map((i) => (
-            <div key={i.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', border: '1px solid var(--hairline)', borderRadius: 12 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 650, fontSize: 13.5 }}>{i.title}</div>
-                <div className="card-sub">{i.nextAction || 'No next action'} · {fmtDuration(i.estimateMin || 0)}</div>
+          planned.map((i) => {
+            const du = i.deadline ? daysUntil(i.deadline) : null;
+            return (
+              <div key={i.id} className="dp-row">
+                <span className="goal-dot" style={{ background: i.color || 'var(--pine)', marginTop: 2 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 650, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.title}</div>
+                  <div className="card-sub">
+                    {i.nextAction || 'No next action'} · {fmtDuration(i.estimateMin || 0)}
+                    {i.plannedStart ? ` · ${i.plannedStart.slice(11, 16)}` : ''}
+                    {du !== null && du < 3 && <span className={`chip chip-${du < 0 ? 'over' : 'soon'}`}>{du < 0 ? `${Math.abs(du)}d overdue` : du === 0 ? 'due today' : `${du}d left`}</span>}
+                  </div>
+                </div>
+                <Btn size="sm" variant="ghost" onClick={() => updateItem(i.id, { startDate: null })}>
+                  Unplan
+                </Btn>
               </div>
-              <Btn size="sm" variant="ghost" onClick={() => updateItem(i.id, { startDate: null })}>
-                Unplan
-              </Btn>
-            </div>
-          ))
+            );
+          })
         ) : (
-          <div className="field-help">Nothing planned yet.</div>
+          <div className="field-help">Nothing planned yet — auto-fill or tick tasks below.</div>
         )}
       </div>
 
-      <div className="section-title">Ready to plan · {ready.length}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 280, overflowY: 'auto', paddingRight: 4 }}>
+      {/* suggested (urgency-ranked) */}
+      <div className="section-title">
+        Ready to plan · {ready.length}
+        <span className="card-sub" style={{ display: 'inline', marginLeft: 8, fontWeight: 500 }}>
+          sorted by deadline urgency → priority
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 280, overflowY: 'auto', paddingRight: 4, marginBottom: 14 }}>
         {ready.length ? (
-          ready.map((i) => (
-            <label key={i.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', border: '1px solid var(--hairline)', borderRadius: 12, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={i.startDate === today}
-                onChange={() => updateItem(i.id, { startDate: i.startDate === today ? null : today })}
-                style={{ accentColor: 'var(--pine)' }}
-              />
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 650, fontSize: 13.5 }}>{i.title}</div>
-                <div className="card-sub">
-                  {priorityLabel(i.priority)} · {fmtDuration(i.estimateMin || 30)}
-                  {i.deadline ? ` · due ${fmtDateNice(i.deadline)}` : ''}
+          ready.map((i) => {
+            const du = i.deadline ? daysUntil(i.deadline) : null;
+            return (
+              <label key={i.id} className="dp-row dp-pick" >
+                <input
+                  type="checkbox"
+                  checked={i.startDate === today}
+                  onChange={() => updateItem(i.id, { startDate: i.startDate === today ? null : today })}
+                  style={{ accentColor: 'var(--pine)', width: 16, height: 16 }}
+                />
+                <span className="goal-dot" style={{ background: i.color || 'var(--faint)', marginTop: 2 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 650, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{i.title}</div>
+                  <div className="card-sub">
+                    {priorityLabel(i.priority)} · {fmtDuration(i.estimateMin || 30)}
+                    {i.deadline ? ` · due ${fmtDateNice(i.deadline)}` : ''}
+                    {du !== null && du < 0 && <span className="chip chip-over">{Math.abs(du)}d overdue</span>}
+                  </div>
                 </div>
-              </div>
-            </label>
-          ))
+                {(() => {
+                  const m = Number(i.estimateMin) || 30;
+                  const fits = used + m <= capLive;
+                  return (
+                    <span className={`chip ${fits ? 'chip-ok' : 'chip-over'}`} style={{ flexShrink: 0 }}>
+                      {fits ? 'fits' : 'over'}
+                    </span>
+                  );
+                })()}
+              </label>
+            );
+          })
         ) : (
-          <div className="field-help">No ready tasks need planning.</div>
+          <div className="field-help">No ready tasks need planning. Capture or unblock work first.</div>
         )}
       </div>
+
+      {urgentFiles.length > 0 && (
+        <>
+          <div className="section-title">Reading deadlines approaching</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {urgentFiles.map((f) => {
+              const du = f.deadline ? daysUntil(f.deadline) : 0;
+              return (
+                <div key={f.id} className="dp-row">
+                  <span className="goal-dot" style={{ background: 'var(--violet)', marginTop: 2 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontWeight: 650, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.title}</div>
+                    <div className="card-sub">p.{f.currentPage}/{f.pageCount} · due {fmtDateNice(f.deadline || '')}</div>
+                  </div>
+                  <Btn
+                    size="sm"
+                    onClick={() => {
+                      onClose();
+                      window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: f.id }));
+                    }}
+                  >
+                    Read
+                  </Btn>
+                  {du <= 3 && <span className={`chip chip-${du < 0 ? 'over' : 'soon'}`}>{du < 0 ? `${Math.abs(du)}d overdue` : `${du}d left`}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
     </Modal>
   );
 }

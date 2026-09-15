@@ -2,10 +2,13 @@
    Local-first storage for heavy artifacts. Metadata lives in Zustand (localStorage);
    blobs and cover images live here so localStorage stays light. 'use client' side only. */
 
+import type { PageAnnoMap } from './types';
+
 const DB_NAME = 'wb-files';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_BLOBS = 'blobs';
 const STORE_COVERS = 'covers';
+const STORE_ANNOS = 'annos'; // fileId -> PageAnnoMap (pen/highlight strokes)
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -21,6 +24,7 @@ function openFileDb(): Promise<IDBDatabase> {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE_BLOBS)) db.createObjectStore(STORE_BLOBS);
       if (!db.objectStoreNames.contains(STORE_COVERS)) db.createObjectStore(STORE_COVERS);
+      if (!db.objectStoreNames.contains(STORE_ANNOS)) db.createObjectStore(STORE_ANNOS);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
@@ -66,6 +70,47 @@ export async function getCover(id: string): Promise<string | undefined> {
 
 export async function delCover(id: string): Promise<void> {
   await tx(STORE_COVERS, 'readwrite', (s) => s.delete(id));
+}
+
+/* ---------- annotations (v5: pen / highlight strokes per file) ---------- */
+
+export async function getAnnos(fileId: string): Promise<PageAnnoMap | null> {
+  const raw = await tx<unknown>(STORE_ANNOS, 'readonly', (s) => s.get(fileId)).catch(() => undefined);
+  if (!raw) return null;
+  try {
+    const map = (typeof raw === 'string' ? JSON.parse(raw) : raw) as PageAnnoMap;
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
+    return map;
+  } catch {
+    return null;
+  }
+}
+
+export async function putAnnos(fileId: string, map: PageAnnoMap): Promise<void> {
+  await tx(STORE_ANNOS, 'readwrite', (s) => s.put(JSON.stringify(map), fileId));
+}
+
+export async function delAnnos(fileId: string): Promise<void> {
+  await tx(STORE_ANNOS, 'readwrite', (s) => s.delete(fileId));
+}
+
+/* in-memory mirror so re-entering the reader is instant */
+const annoCache = new Map<string, PageAnnoMap>();
+
+export async function fetchAnnosCached(fileId: string): Promise<PageAnnoMap> {
+  const hit = annoCache.get(fileId);
+  if (hit) return hit;
+  const fromIdb = (await getAnnos(fileId).catch(() => null)) || {};
+  annoCache.set(fileId, fromIdb);
+  return fromIdb;
+}
+
+export function cacheAnnos(fileId: string, map: PageAnnoMap): void {
+  annoCache.set(fileId, map);
+}
+
+export function dropAnnoCache(fileId: string): void {
+  annoCache.delete(fileId);
 }
 
 /* ---------- in-memory caches ---------- */
@@ -140,10 +185,15 @@ export function releaseBlobUrl(id: string): void {
   }
 }
 
-/** Delete every artifact of a file (blob, cover, urls). */
+/** Delete every artifact of a file (blob, cover, annotations, urls). */
 export async function purgeFileArtifacts(id: string): Promise<void> {
   releaseBlobUrl(id);
   coverCache.delete(id);
   coverInflight.delete(id);
-  await Promise.all([delBlob(id).catch(() => undefined), delCover(id).catch(() => undefined)]);
+  annoCache.delete(id);
+  await Promise.all([
+    delBlob(id).catch(() => undefined),
+    delCover(id).catch(() => undefined),
+    delAnnos(id).catch(() => undefined),
+  ]);
 }

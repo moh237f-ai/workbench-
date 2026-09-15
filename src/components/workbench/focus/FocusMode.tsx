@@ -1,24 +1,104 @@
-/* ==================== Focus Mode Overlay ==================== */
+/* ==================== Focus Mode v6 ====================
+   - Photo atmospheres + user-uploaded backgrounds (local files)
+   - All-new timer-aware clock faces, movable / sizable / colorable
+   - Fullscreen keeps the background (fullscreen targets the overlay itself)
+   - Auto-coloring: UI chrome follows the atmosphere's accent color */
+
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Play, Pause, Square, SkipForward, X, Maximize2, Minus, Image as ImageIcon,
-  Focus as FocusIcon, Target, Clock, Sparkles, BookOpen,
+  Focus as FocusIcon, Target, Clock, Sparkles, BookOpen, Orbit, Layers, Type,
+  Activity, Plus, SlidersHorizontal, Move, ImagePlus, Palette, Trash2, RotateCcw,
 } from 'lucide-react';
 import { useWB, wbFileProgress, wbFileReadPages } from '@/lib/workbench/store';
 import { getFocusTiming } from '@/lib/workbench/helpers';
-import { FOCUS_BACKGROUNDS, FOCUS_PRESETS } from '@/lib/workbench/types';
-import type { ClockType } from '@/lib/workbench/types';
-import { AnalogClock, DigitalClock, FlipClock, MinimalClock } from '../clocks';
+import { FOCUS_BACKGROUNDS, FOCUS_BG_META, FOCUS_PRESETS, PEN_SWATCHES } from '@/lib/workbench/types';
+import type { ClockType, FocusBackgroundId } from '@/lib/workbench/types';
+import { ClockFace } from '../clocks';
 import { toast, useNow } from '../ui/primitives';
 
 const CLOCK_TYPES: { id: ClockType; label: string; icon: React.ReactNode }[] = [
-  { id: 'analog', label: 'Analog', icon: <Clock size={14} /> },
-  { id: 'digital', label: 'Digital', icon: <Target size={14} /> },
-  { id: 'minimal', label: 'Minimal', icon: <FocusIcon size={14} /> },
-  { id: 'flip', label: 'Flip', icon: <Sparkles size={14} /> },
+  { id: 'aura', label: 'Aura', icon: <Activity size={14} /> },
+  { id: 'orbit', label: 'Orbit', icon: <Orbit size={14} /> },
+  { id: 'cards', label: 'Cards', icon: <Layers size={14} /> },
+  { id: 'typo', label: 'Typo', icon: <Type size={14} /> },
 ];
+
+const CLOCK_ACCENTS = [...PEN_SWATCHES.slice(0, 5), '#2DD4BF', '#FBBF24'];
+
+/** Downscale an image file to a JPEG dataURL (max 1600w) + extract a dominant accent. */
+async function importBackgroundFile(
+  file: File
+): Promise<{ dataUrl: string; accent: string } | null> {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise<HTMLImageElement | null>((resolve) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => resolve(null);
+      el.src = url;
+    });
+    if (!img) return null;
+    const MAX_W = 1600;
+    const scale = Math.min(1, MAX_W / (img.naturalWidth || MAX_W));
+    const w = Math.max(320, Math.round(img.naturalWidth * scale));
+    const h = Math.round((img.naturalHeight || w * 0.6) * (w / (img.naturalWidth || w)));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, 0, 0, w, h);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+
+    /* dominant accent: sample a small grid, weight by saturation, avoid extremes */
+    const sw = 36;
+    const sh = Math.max(8, Math.round((h / w) * sw));
+    const small = document.createElement('canvas');
+    small.width = sw;
+    small.height = sh;
+    const sctx = small.getContext('2d');
+    if (sctx) {
+      sctx.drawImage(img, 0, 0, sw, sh);
+      const data = sctx.getImageData(0, 0, sw, sh).data;
+      let rx = 0;
+      let gy = 0;
+      let bl = 0;
+      let wsum = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        const r = data[i];
+        const g = data[i + 1];
+        const b = data[i + 2];
+        const max = Math.max(r, g, b);
+        const min = Math.min(r, g, b);
+        const l = (max + min) / 510;
+        const sat = max === min ? 0 : (max - min) / (255 - Math.abs(max + min - 255) || 1);
+        /* prefer colorful mid-tones */
+        const weight = Math.max(0, sat * (1 - Math.abs(l - 0.55) * 1.6));
+        rx += r * weight;
+        gy += g * weight;
+        bl += b * weight;
+        wsum += weight;
+      }
+      if (wsum > 0.001) {
+        let r = rx / wsum;
+        let g = gy / wsum;
+        let b = bl / wsum;
+        const boost = (c: number) => Math.round(Math.min(255, Math.max(0, 0.5 + (c / 255) * 0.5) * 255));
+        r = boost(r);
+        g = boost(g);
+        b = boost(b);
+        const hex = '#' + [r, g, b].map((c) => c.toString(16).padStart(2, '0')).join('');
+        return { dataUrl, accent: hex };
+      }
+    }
+    return { dataUrl, accent: '#2DD4BF' };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
 
 export function FocusMode() {
   const focusOpen = useWB((s) => s.focusOpen);
@@ -26,17 +106,23 @@ export function FocusMode() {
   const items = useWB((s) => s.items);
   const files = useWB((s) => s.files);
   const clockType = useWB((s) => s.focusClockType);
-  const background = useWB((s) => s.focusBackground);
   const preset = useWB((s) => s.focusPreset);
   const compact = useWB((s) => s.focusCompact);
   const customWork = useWB((s) => s.focusCustomWork);
   const customBreak = useWB((s) => s.focusCustomBreak);
+  const customBgs = useWB((s) => s.focusCustomBgs);
+  const clockCfg = useWB((s) => s.focusClockCfg);
+  const focusAutoColor = useWB((s) => s.focusAutoColor);
 
   const setFocusOpen = useWB((s) => s.setFocusOpen);
   const setClockType = useWB((s) => s.setFocusClockType);
   const setBackground = useWB((s) => s.setFocusBackground);
   const setPreset = useWB((s) => s.setFocusPreset);
   const toggleCompact = useWB((s) => s.toggleFocusCompact);
+  const setClockCfg = useWB((s) => s.setFocusClockCfg);
+  const resetClockCfg = useWB((s) => s.resetFocusClockCfg);
+  const addFocusCustomBg = useWB((s) => s.addFocusCustomBg);
+  const removeFocusCustomBg = useWB((s) => s.removeFocusCustomBg);
   const startPomodoro = useWB((s) => s.startPomodoro);
   const pausePomodoro = useWB((s) => s.pausePomodoro);
   const resumePomodoro = useWB((s) => s.resumePomodoro);
@@ -44,7 +130,27 @@ export function FocusMode() {
   const stopTimer = useWB((s) => s.stopTimer);
 
   const [bgPanelOpen, setBgPanelOpen] = useState(false);
+  const [clockPop, setClockPop] = useState(false);
+  const [importingBg, setImportingBg] = useState(false);
+  const [livePos, setLivePos] = useState<{ x: number; y: number } | null>(null);
   const now = useNow(focusOpen);
+
+  /* guard legacy persisted ids (v4 flow/nebula/… and v5 analog/digital/minimal/flip) */
+  const storedBg = useWB((s) => s.focusBackground);
+  const isCustomBg = storedBg.startsWith('custom:');
+  const customBg = isCustomBg ? customBgs.find((b) => b.id === storedBg.slice(7)) || null : null;
+  const background: string =
+    customBg || FOCUS_BACKGROUNDS.includes(storedBg as FocusBackgroundId)
+      ? storedBg
+      : 'aurora';
+  const bgClass = customBg ? 'fb-custom' : `fb-${background}`;
+
+  /* ---------- accents: clock color + auto UI color ---------- */
+  const bgAccent = customBg
+    ? customBg.accent
+    : FOCUS_BG_META.find((m) => m.id === background)?.accent || '#2DD4BF';
+  const clockAccent = clockCfg.accent === 'auto' ? bgAccent : clockCfg.accent;
+  const uiAccent = focusAutoColor ? bgAccent : 'var(--pine)';
 
   const timing = getFocusTiming(activeTimer, now.getTime());
   const hasTimer = !!activeTimer;
@@ -65,18 +171,97 @@ export function FocusMode() {
     }
   }, [focusOpen, pomodoro, paused, timing.remaining, advancePomodoro]);
 
-  /* Esc exits focus mode (timer keeps running) */
+  /* Esc exits focus mode · B cycles atmosphere · ] size up · [ size down */
   useEffect(() => {
     if (!focusOpen) return;
     const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const inField =
+        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
       if (e.key === 'Escape') {
         e.preventDefault();
         setFocusOpen(false);
+      } else if (inField) {
+        return;
+      } else if (e.key === 'b' || e.key === 'B') {
+        const cur = (FOCUS_BACKGROUNDS as readonly string[]).indexOf(background);
+        const next = FOCUS_BACKGROUNDS[(cur + 1) % FOCUS_BACKGROUNDS.length];
+        setBackground(next);
+        toast(`Atmosphere · ${FOCUS_BG_META.find((m) => m.id === next)?.label ?? next}`, 'Press B again to keep exploring.');
+      } else if (e.key === ']') {
+        setClockCfg({ size: Math.min(170, clockCfg.size + 10) });
+      } else if (e.key === '[') {
+        setClockCfg({ size: Math.max(60, clockCfg.size - 10) });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [focusOpen, setFocusOpen]);
+  }, [focusOpen, background, clockCfg.size, setFocusOpen, setBackground, setClockCfg]);
+
+  /* ---------- draggable clock (position % persisted on release) ---------- */
+  const dragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
+  const onClockPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!e.isPrimary) return;
+      dragRef.current = {
+        startX: e.clientX,
+        startY: e.clientY,
+        ox: clockCfg.xPct,
+        oy: clockCfg.yPct,
+      };
+      setLivePos({ x: clockCfg.xPct, y: clockCfg.yPct });
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* best effort */
+      }
+      e.preventDefault();
+    },
+    [clockCfg.xPct, clockCfg.yPct]
+  );
+  const onClockPointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const x = Math.min(92, Math.max(8, d.ox + ((e.clientX - d.startX) / window.innerWidth) * 100));
+    const y = Math.min(86, Math.max(12, d.oy + ((e.clientY - d.startY) / window.innerHeight) * 100));
+    setLivePos({ x, y });
+  }, []);
+  const onClockPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = dragRef.current;
+      if (!d) return;
+      dragRef.current = null;
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {
+        /* already released */
+      }
+      const final = livePos;
+      if (final) setClockCfg({ xPct: Math.round(final.x), yPct: Math.round(final.y) });
+      setLivePos(null);
+    },
+    [livePos, setClockCfg]
+  );
+
+  /* ---------- import local background ---------- */
+  const bgFileRef = useRef<HTMLInputElement | null>(null);
+  const onBgFilePicked = async (f: File | null) => {
+    if (!f) return;
+    setImportingBg(true);
+    try {
+      const res = await importBackgroundFile(f);
+      if (!res) {
+        toast('Could not read image', 'Try a JPG or PNG file.');
+        return;
+      }
+      const label = f.name.replace(/\.[^.]+$/, '').slice(0, 28) || 'My background';
+      addFocusCustomBg(label, res.dataUrl, res.accent);
+      toast('Background added', `${label} — now active. UI auto-colors follow it.`);
+    } finally {
+      setImportingBg(false);
+      if (bgFileRef.current) bgFileRef.current.value = '';
+    }
+  };
 
   if (!focusOpen) return null;
 
@@ -94,6 +279,8 @@ export function FocusMode() {
   const workMin = preset === 'custom' ? customWork : presetObj.workMin;
   const breakMin = preset === 'custom' ? customBreak : presetObj.breakMin;
 
+  const clockPos = livePos || { x: clockCfg.xPct, y: clockCfg.yPct };
+
   const clockProps = {
     now,
     hasTimer,
@@ -102,20 +289,26 @@ export function FocusMode() {
     progress: timing.progress,
     cycle: timing.cycleCount,
     paused,
+    accent: clockAccent,
   };
 
   return (
     <div
-      className={`focus-overlay fb-${background} ${compact ? 'focus-compact' : ''} ${bgPanelOpen ? 'show-bg-panel' : ''}`}
+      id="focus-overlay-root"
+      className={`focus-overlay ${bgClass} ${compact ? 'focus-compact' : ''} ${bgPanelOpen ? 'show-bg-panel' : ''}`}
       role="dialog"
       aria-modal="true"
       aria-label="Focus mode"
+      style={{
+        ['--focus-accent' as string]: uiAccent,
+        ...(customBg ? { ['--focus-bg-img' as string]: `url("${customBg.dataUrl}")`, ['--focus-bg-base' as string]: '#06090a' } : {}),
+      }}
     >
       <div className="focus-shell-frame" />
 
       <div className="focus-topbar">
         <div className="focus-context-card">
-          <div className="focus-context-icon">
+          <div className="focus-context-icon" style={{ color: 'var(--focus-accent)', background: 'color-mix(in srgb, var(--focus-accent) 14%, transparent)' }}>
             {focusFile ? <BookOpen size={15} /> : hasTimer ? <Play size={15} /> : <FocusIcon size={15} />}
           </div>
           <div>
@@ -140,10 +333,20 @@ export function FocusMode() {
               <span className="lbl">{c.label}</span>
             </button>
           ))}
+          <button
+            className="focus-clock-cfg-btn"
+            title="Clock size, position and color"
+            aria-label="Clock settings"
+            aria-expanded={clockPop}
+            onClick={() => setClockPop((v) => !v)}
+            type="button"
+          >
+            <SlidersHorizontal size={14} />
+          </button>
         </div>
         <button
           className="focus-mini-tool"
-          title="Fullscreen"
+          title="Fullscreen — the atmosphere stays with you"
           aria-label="Toggle fullscreen"
           onClick={() => {
             const el = document.getElementById('focus-overlay-root');
@@ -155,6 +358,58 @@ export function FocusMode() {
           <Maximize2 size={15} />
         </button>
       </div>
+
+      {/* clock settings popover */}
+      {clockPop && (
+        <div className="fc-cfg-pop" role="dialog" aria-label="Clock settings">
+          <div className="fc-cfg-title">Your clock</div>
+          <div className="fc-cfg-row">
+            <span className="fc-cfg-lab">Size</span>
+            <input
+              type="range" min={60} max={170} step={5} value={clockCfg.size}
+              onChange={(e) => setClockCfg({ size: Number(e.target.value) })}
+              aria-label="Clock size"
+              style={{ accentColor: 'var(--focus-accent)' }}
+            />
+            <span className="fc-cfg-val mono">{clockCfg.size}%</span>
+          </div>
+          <div className="fc-cfg-row">
+            <span className="fc-cfg-lab">Color</span>
+            <div className="fc-cfg-swatches">
+              <button
+                type="button"
+                className={`fc-swatch fc-swatch-auto ${clockCfg.accent === 'auto' ? 'active' : ''}`}
+                onClick={() => setClockCfg({ accent: 'auto' })}
+                title="Auto — follows the background"
+              >
+                <Palette size={13} />
+              </button>
+              {CLOCK_ACCENTS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={`fc-swatch ${clockCfg.accent === c ? 'active' : ''}`}
+                  style={{ background: c }}
+                  onClick={() => setClockCfg({ accent: c })}
+                  title={c}
+                  aria-label={`Clock color ${c}`}
+                />
+              ))}
+            </div>
+          </div>
+          <div className="fc-cfg-row">
+            <span className="fc-cfg-lab">Move</span>
+            <span className="fc-cfg-help">
+              <Move size={12} /> drag the clock anywhere · <span className="mono">[</span>/<span className="mono">]</span> resize
+            </span>
+          </div>
+          <div className="fc-cfg-row">
+            <button type="button" className="fc-cfg-reset" onClick={() => { resetClockCfg(); setLivePos(null); }}>
+              <RotateCcw size={12} /> Reset size &amp; position
+            </button>
+          </div>
+        </div>
+      )}
 
       <button
         className="focus-exit"
@@ -176,31 +431,111 @@ export function FocusMode() {
             : 'Live clock'}
       </div>
 
-      <div className="focus-stage" id="focus-overlay-root">
-        <div className="focus-display" style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          {clockType === 'analog' && <AnalogClock {...clockProps} />}
-          {clockType === 'digital' && <DigitalClock {...clockProps} />}
-          {clockType === 'minimal' && <MinimalClock {...clockProps} />}
-          {clockType === 'flip' && <FlipClock {...clockProps} />}
+      {/* the clock — movable + sizable */}
+      <div className="focus-stage focus-stage-v6">
+        <div
+          className="fc-wrap"
+          style={{
+            left: `${clockPos.x}%`,
+            top: `${clockPos.y}%`,
+            transform: `translate(-50%, -50%) scale(${clockCfg.size / 100})`,
+            cursor: livePos ? 'grabbing' : 'grab',
+          }}
+          onPointerDown={onClockPointerDown}
+          onPointerMove={onClockPointerMove}
+          onPointerUp={onClockPointerUp}
+          onPointerCancel={onClockPointerUp}
+          role="img"
+          aria-label={`${CLOCK_TYPES.find((c) => c.id === clockType)?.label ?? ''} clock — drag to move`}
+          title="Drag to move · [ ] keys resize"
+          tabIndex={-1}
+        >
+          <ClockFace id={clockType} {...clockProps} />
         </div>
       </div>
 
+      {/* background panel */}
       <div className="focus-bg-panel">
         <div className="focus-bg-panel-inner">
-          <div className="focus-bg-panel-title">Focus atmosphere</div>
+          <div className="focus-bg-panel-title">Focus atmosphere · B to cycle</div>
           <div className="focus-bg-grid">
-            {FOCUS_BACKGROUNDS.map((b) => (
+            {FOCUS_BG_META.map((b) => (
               <button
-                key={b}
-                className={`focus-bg-card ${background === b ? 'active' : ''}`}
-                onClick={() => setBackground(b)}
+                key={b.id}
+                className={`focus-bg-card ${!customBg && background === b.id ? 'active' : ''}`}
+                onClick={() => setBackground(b.id)}
                 type="button"
+                aria-pressed={!customBg && background === b.id}
               >
-                <span className="focus-bg-swatch" />
-                {b.charAt(0).toUpperCase() + b.slice(1)}
+                {b.photo ? (
+                  <span
+                    className="focus-bg-thumb"
+                    style={{ backgroundImage: `url(${b.photo})` }}
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <span className="focus-bg-swatch" aria-hidden="true" />
+                )}
+                {b.label}
               </button>
             ))}
           </div>
+
+          {(customBgs.length > 0 || true) && (
+            <>
+              <div className="focus-bg-panel-title" style={{ marginTop: 12 }}>
+                Your photos
+                <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>
+                  {' '}· from this device
+                </span>
+              </div>
+              <div className="focus-bg-grid">
+                {customBgs.map((b) => (
+                  <div key={b.id} className={`focus-bg-card has-x ${customBg?.id === b.id ? 'active' : ''}`}>
+                    <button
+                      type="button"
+                      className="focus-bg-card-main"
+                      onClick={() => setBackground(`custom:${b.id}`)}
+                      aria-pressed={customBg?.id === b.id}
+                    >
+                      <span className="focus-bg-thumb" style={{ backgroundImage: `url(${b.dataUrl})` }} aria-hidden="true" />
+                      {b.label}
+                    </button>
+                    <button
+                      type="button"
+                      className="focus-bg-x"
+                      title="Remove this background"
+                      aria-label={`Remove ${b.label}`}
+                      onClick={() => {
+                        removeFocusCustomBg(b.id);
+                        toast('Background removed', b.label);
+                      }}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  className="focus-bg-add"
+                  type="button"
+                  disabled={importingBg}
+                  onClick={() => bgFileRef.current?.click()}
+                >
+                  <ImagePlus size={16} />
+                  <span>{importingBg ? 'Adding…' : 'Add photo'}</span>
+                </button>
+              </div>
+              <input
+                ref={bgFileRef}
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                onChange={(e) => void onBgFilePicked(e.target.files?.[0] || null)}
+                aria-hidden="true"
+                tabIndex={-1}
+              />
+            </>
+          )}
         </div>
       </div>
 
@@ -225,6 +560,8 @@ export function FocusMode() {
           ) : (
             <div className="focus-status-line">
               Choose a rhythm, then start. <span className="focus-kbd">F</span> returns here ·{' '}
+              <span className="focus-kbd">B</span> changes atmosphere ·{' '}
+              <span className="focus-kbd">[ ]</span> resize clock ·{' '}
               <span className="focus-kbd">Esc</span> exits
             </div>
           )}

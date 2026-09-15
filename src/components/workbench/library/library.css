@@ -419,6 +419,10 @@
   gap: 20px;
   align-items: start;
 }
+/* DateField replaces the native deadline input — match .field spacing */
+.lib-form-grid .df-field {
+  margin-bottom: 14px;
+}
 .lib-cover-preview {
   position: relative;
   aspect-ratio: 3 / 4;
@@ -554,14 +558,822 @@
   border-radius: 99px;
 }
 
+/* ---------- v6: folder tree (file-manager rail) — replaces the v5 flat chip rail ---------- */
+
+.lib-shell {
+  display: grid;
+  grid-template-columns: 254px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.lib-main {
+  min-width: 0;
+}
+
+.lib-tree {
+  --lib-indent: 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-wb);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-solid) 92%, transparent), var(--surface));
+  padding: 10px;
+  position: sticky;
+  top: 10px;
+}
+.lib-tree-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 6px;
+}
+.lib-tree-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-sora), sans-serif;
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.lib-tree-title svg {
+  flex-shrink: 0;
+}
+.lib-tree-fold {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.lib-tree-fold svg {
+  transition: transform 0.2s var(--ease);
+}
+.lib-tree.closed .lib-tree-fold svg {
+  transform: rotate(-90deg);
+}
+.lib-tree-fold:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+.lib-tree-fold:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+
+.lib-tree-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: min(58vh, 560px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+.lib-tree-body::-webkit-scrollbar {
+  width: 7px;
+}
+.lib-tree-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted2) 32%, transparent);
+  border-radius: 99px;
+}
+
+.lib-tree-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 36px;
+  padding: 4px 6px 4px calc(6px + var(--lib-d, 0) * var(--lib-indent));
+  border-radius: 10px;
+  border: 1px solid transparent;
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.13s var(--ease), color 0.13s var(--ease), border-color 0.13s var(--ease);
+}
+.lib-tree-row:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+.lib-tree-row:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: -2px;
+}
+.lib-tree-row.active {
+  background: var(--pine-light);
+  color: var(--pine-dark);
+  border-color: color-mix(in srgb, var(--pine) 25%, transparent);
+  font-weight: 700;
+}
+.lib-tree-row.active:hover {
+  color: var(--pine-dark);
+}
+.lib-tree-row.drop {
+  border: 1px dashed var(--pine);
+  background: var(--pine-light);
+  color: var(--pine-dark);
+}
+.lib-tree-row.renaming {
+  cursor: default;
+}
+.lib-tree-row.renaming .lib-tree-acts {
+  display: none;
+}
+.lib-tree-row .lib-folder-input {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+
+.lib-tree-caret {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.13s var(--ease), color 0.13s var(--ease);
+}
+.lib-tree-caret svg {
+  transition: transform 0.18s var(--ease);
+}
+.lib-tree-caret.open svg {
+  transform: rotate(90deg);
+}
+.lib-tree-caret:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+.lib-tree-caret:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+.lib-tree-caret.spacer {
+  cursor: default;
+  pointer-events: none;
+}
+.lib-tree-caret.spacer:hover {
+  background: transparent;
+  color: var(--faint);
+}
+
+.lib-tree-ico {
+  flex-shrink: 0;
+  color: var(--muted2);
+  opacity: 0.85;
+}
+.lib-tree-row.active .lib-tree-ico {
+  color: var(--pine-dark);
+  opacity: 1;
+}
+
+/* color dot: 18px hit area, 10px visible dot (background-clip trick) */
+.lib-tree-dot {
+  width: 18px;
+  height: 18px;
+  padding: 4px;
+  border: none;
+  border-radius: 50%;
+  background-clip: content-box;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: inline-block;
+  transition: transform 0.15s var(--ease);
+}
+.lib-tree-dot:hover {
+  transform: scale(1.25);
+}
+.lib-tree-dot:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+
+.lib-tree-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.lib-tree-row .lib-folder-count {
+  flex-shrink: 0;
+}
+.lib-tree-row.active .lib-folder-count {
+  background: transparent;
+  color: inherit;
+  opacity: 0.8;
+}
+
+/* hover-revealed per-folder actions (always visible on touch) */
+.lib-tree-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s var(--ease);
+}
+.lib-tree-row:hover .lib-tree-acts,
+.lib-tree-acts:focus-within {
+  opacity: 1;
+}
+@media (hover: none) {
+  .lib-tree-acts {
+    opacity: 1;
+  }
+}
+.lib-tree-act {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.13s var(--ease), color 0.13s var(--ease);
+}
+.lib-tree-act svg {
+  pointer-events: none;
+}
+.lib-tree-act:hover {
+  background: var(--pine-light);
+  color: var(--pine);
+}
+.lib-tree-act.danger:hover {
+  background: var(--coral-light);
+  color: var(--coral);
+}
+.lib-tree-act:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+
+/* inline subfolder / root creation rows */
+.lib-subrow {
+  display: flex;
+  padding: 2px 6px 2px calc(6px + (var(--lib-d, 0) + 1) * var(--lib-indent));
+}
+.lib-subrow .lib-folder-input {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+}
+.lib-tree .lib-newfolder-btn {
+  width: 100%;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+/* icon picker popover (fixed, portaled to body) */
+.lib-icon-pop {
+  position: fixed;
+  z-index: 320;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  width: 200px;
+  padding: 8px;
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-solid);
+  box-shadow: 0 18px 48px -16px rgba(10, 20, 16, 0.35), 0 2px 8px rgba(10, 20, 16, 0.08);
+  animation: libPopIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes libPopIn {
+  from { opacity: 0; transform: translateY(4px) scale(0.97); }
+  to { opacity: 1; transform: none; }
+}
+.lib-icon-cell {
+  display: grid;
+  place-items: center;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.lib-icon-cell:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+.lib-icon-cell.sel {
+  background: var(--pine-light);
+  color: var(--pine);
+  border-color: color-mix(in srgb, var(--pine) 30%, transparent);
+}
+.lib-icon-cell:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+
+/* shared folder atoms (tree rows, card chips, create/rename inputs) */
+.lib-folder-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+.lib-folder-count {
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--faint);
+  background: var(--surface-alt);
+  border-radius: 99px;
+  padding: 1px 7px;
+  flex-shrink: 0;
+}
+.lib-folder-input {
+  min-width: 96px;
+  max-width: 160px;
+  min-height: 28px;
+  padding: 3px 10px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--pine) 45%, var(--hairline));
+  background: var(--surface-solid);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  outline: none;
+  box-shadow: 0 0 0 3px var(--pine-light);
+  user-select: text;
+}
+.lib-newfolder-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 6px 14px;
+  border-radius: 99px;
+  border: 1px dashed var(--hairline);
+  background: transparent;
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.lib-newfolder-btn:hover {
+  border-color: var(--pine);
+  border-style: solid;
+  color: var(--pine);
+  background: var(--pine-light);
+}
+.lib-newfolder-btn:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+.lib-newfolder-btn svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+/* ---------- v6: breadcrumb path (under the toolbar) ---------- */
+
+.lib-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: -2px 0 12px;
+}
+.lib-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.13s var(--ease), color 0.13s var(--ease);
+}
+.lib-crumb svg {
+  flex-shrink: 0;
+  color: var(--faint);
+}
+.lib-crumb:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+.lib-crumb:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+.lib-crumb.cur {
+  color: var(--ink);
+  background: var(--surface-alt);
+  font-weight: 750;
+}
+.lib-crumb.cur svg {
+  color: var(--pine);
+}
+.lib-crumb-sep {
+  color: var(--faint);
+  font-size: 11px;
+  user-select: none;
+}
+.lib-crumb-unfiled {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 3px 11px;
+  margin-left: 6px;
+  border: 1px dashed var(--hairline);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.13s var(--ease), color 0.13s var(--ease), background 0.13s var(--ease);
+}
+.lib-crumb-unfiled svg {
+  flex-shrink: 0;
+}
+.lib-crumb-unfiled:hover {
+  border-color: var(--pine);
+  border-style: solid;
+  color: var(--pine);
+}
+.lib-crumb-unfiled.cur {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--pine) 30%, var(--hairline));
+  background: var(--pine-light);
+  color: var(--pine-dark);
+}
+.lib-crumb-unfiled:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+
+/* ---------- v6: multi-file selection mode ---------- */
+
+.lib-card.selecting {
+  cursor: pointer;
+}
+.lib-card.selected {
+  border-color: var(--pine);
+  box-shadow: 0 0 0 2px var(--pine-light), var(--shadow-md);
+}
+.lib-check {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+  border: 1.5px solid color-mix(in srgb, var(--surface-solid) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-solid) 88%, transparent);
+  color: var(--pine);
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease), border-color 0.14s var(--ease),
+    transform 0.14s var(--ease);
+}
+.lib-check svg {
+  pointer-events: none;
+}
+.lib-check:hover {
+  transform: scale(1.08);
+}
+.lib-check:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+.lib-check.on {
+  background: var(--pine);
+  border-color: var(--pine);
+  color: var(--surface-solid);
+}
+
+/* floating bulk action bar (fixed bottom center, above the footer) */
+.lib-bulk {
+  position: fixed;
+  left: 50%;
+  bottom: calc(60px + env(safe-area-inset-bottom, 0px));
+  transform: translateX(-50%);
+  z-index: 500;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  justify-content: center;
+  max-width: min(96vw, 880px);
+  padding: 9px 12px;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--pine) 22%, var(--hairline));
+  background: color-mix(in srgb, var(--surface-solid) 94%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 24px 60px -20px rgba(10, 20, 16, 0.4), 0 2px 10px rgba(10, 20, 16, 0.08);
+  animation: libBulkIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes libBulkIn {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.lib-bulk-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 4px;
+  color: var(--pine-dark);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.lib-bulk-count svg {
+  color: var(--pine);
+  flex-shrink: 0;
+}
+.lib-bulk-count .mono {
+  font-size: 13px;
+}
+.lib-bulk-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint);
+}
+.lib-bulk-move svg {
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.lib-bulk-move select {
+  min-height: 32px;
+  max-width: 160px;
+  padding: 4px 8px;
+  border-radius: 9px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-solid);
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.lib-bulk-move select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--pine) 40%, var(--hairline));
+  color: var(--ink);
+}
+.lib-bulk-move select:focus-visible {
+  outline: none;
+  border-color: var(--pine);
+  box-shadow: 0 0 0 3px var(--pine-light);
+}
+.lib-bulk-move select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* empty-state action pair */
+.lib-empty-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+/* ---------- v5: search box (header actions) ---------- */
+
+.lib-search-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 9px 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: var(--surface);
+  color: var(--muted2);
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.lib-search-box:focus-within {
+  border-color: var(--pine);
+  box-shadow: 0 0 0 3px var(--pine-light);
+}
+.lib-search-box > svg {
+  flex-shrink: 0;
+}
+.lib-search-box input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 550;
+  color: var(--ink);
+  width: 150px;
+  min-width: 0;
+}
+.lib-search-box input::placeholder {
+  color: var(--faint);
+}
+.lib-search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.lib-search-clear:hover {
+  background: var(--surface-alt);
+  color: var(--ink);
+}
+.lib-search-clear:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 1px;
+}
+.lib-search-clear svg {
+  pointer-events: none;
+}
+
+/* ---------- v5: card folder chip, favorite/annotation chips, move select, dragging ---------- */
+
+.lib-card.dragging {
+  opacity: 0.5;
+  transform: scale(0.985);
+  border-style: dashed;
+}
+.lib-card-folder {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-alt);
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+  max-width: 100%;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease);
+}
+.lib-card-folder:hover {
+  border-color: color-mix(in srgb, var(--pine) 40%, var(--hairline));
+  color: var(--ink);
+}
+.lib-card-folder:focus-visible {
+  outline: 2px solid var(--pine);
+  outline-offset: 2px;
+}
+.lib-folder-dot-sm {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.lib-card-folder .lib-folder-name {
+  max-width: 110px;
+}
+.lib-fav-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: var(--amber-light);
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.lib-fav-chip.anno {
+  background: var(--violet-light);
+  color: var(--violet);
+}
+.lib-fav-chip svg {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+.lib-move {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--faint);
+}
+.lib-move svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+.lib-move-select {
+  min-height: 30px;
+  max-width: 118px;
+  padding: 4px 7px;
+  border-radius: 9px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-solid);
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.lib-move-select:hover {
+  border-color: color-mix(in srgb, var(--pine) 40%, var(--hairline));
+  color: var(--ink);
+}
+.lib-move-select:focus-visible {
+  outline: none;
+  border-color: var(--pine);
+  box-shadow: 0 0 0 3px var(--pine-light);
+}
+
+/* insight labels can carry a small icon (Favorites / Annotated tiles) */
+.lib-insight-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.lib-insight-label svg {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+}
+
 /* ---------- responsive ---------- */
 
+@media (max-width: 900px) {
+  .lib-shell {
+    grid-template-columns: 1fr;
+  }
+  .lib-tree {
+    position: static;
+  }
+  .lib-tree-body {
+    max-height: min(42vh, 380px);
+  }
+}
 @media (max-width: 520px) {
   .lib-grid {
     grid-template-columns: 1fr;
   }
   .lib-filter-seg {
     flex-wrap: wrap;
+  }
+  .lib-search-box input {
+    width: 104px;
+  }
+  .lib-folder-name {
+    max-width: 110px;
   }
 }
 @media (max-width: 620px) {
@@ -570,5 +1382,79 @@
   }
   .lib-cover-preview {
     max-width: 230px;
+  }
+}
+@media (hover: none), (max-width: 640px) {
+  .lib-move-select {
+    min-height: 36px;
+  }
+}
+
+/* ≤700px: reduced tree indentation (nested rows still fit narrow screens) */
+@media (max-width: 700px) {
+  .lib-tree {
+    --lib-indent: 9px;
+  }
+}
+
+/* touch-friendly tree (44px targets) + bulk bar above a taller footer */
+@media (max-width: 640px) {
+  .lib-tree-row {
+    min-height: 42px;
+    font-size: 13px;
+  }
+  .lib-tree-caret {
+    width: 26px;
+    height: 26px;
+  }
+  .lib-tree-act {
+    width: 28px;
+    height: 28px;
+  }
+  .lib-crumb {
+    max-width: 130px;
+  }
+  .lib-bulk {
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+    gap: 5px;
+    padding: 8px 9px;
+  }
+  .lib-bulk .btn {
+    min-height: 38px;
+  }
+  .lib-bulk-move select {
+    min-height: 38px;
+  }
+}
+@media (hover: none) {
+  .lib-tree-row {
+    min-height: 44px;
+  }
+  .lib-tree-caret {
+    width: 32px;
+    height: 32px;
+  }
+  .lib-tree-act {
+    width: 34px;
+    height: 34px;
+  }
+  .lib-check {
+    width: 32px;
+    height: 32px;
+  }
+}
+
+/* ---------- reduced motion ---------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .lib-bulk,
+  .lib-icon-pop {
+    animation: none;
+  }
+  .lib-tree-caret svg,
+  .lib-tree-fold svg,
+  .lib-check,
+  .lib-tree-dot {
+    transition: none;
   }
 }

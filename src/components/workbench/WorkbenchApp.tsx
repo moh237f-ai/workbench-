@@ -10,15 +10,14 @@ import { Sidebar, Topbar, StatusFooter } from './shell';
 import { FocusMode } from './focus/FocusMode';
 import { ItemFormModal, ItemDetailModal } from './modals/ItemModals';
 import {
-  CaptureModal, DailyPlanModal, DataModal, DayPlannerModal, HabitFormModal, LabelsModal,
-  ShortcutsModal, TimeboxModal,
+  CaptureModal, DailyPlanModal, HabitFormModal, LabelsModal, TimeboxModal, DayPlannerModal,
 } from './modals/MiscModals';
 import { CommandPalette } from './modals/CommandPalette';
+import { SettingsModal } from './modals/SettingsModal';
 import { ViewCtx } from './views/viewCtx';
 import { TodayView } from './views/TodayView';
 import { DashboardView } from './views/DashboardView';
 import { GoalsView, GoalsHeaderActions } from './views/GoalsView';
-import { LogView } from './views/LogView';
 import { HabitsView, HabitsHeaderActions } from './views/HabitsView';
 import { JournalView } from './views/JournalView';
 import { CalendarView, CalendarHeaderActions } from './views/CalendarView';
@@ -56,11 +55,12 @@ function ViewBody({ view }: { view: ViewId }) {
     case 'library': return <LibraryView />;
     case 'roadmap': return <RoadmapView />;
     case 'planner': return <PlannerView />;
-    case 'log': return <LogView />;
     case 'habits': return <HabitsView />;
     case 'journal': return <JournalView />;
     case 'calendar': return <CalendarView />;
-    case 'reports': return <ReportsView />;
+    case 'reports':
+    case 'log':
+      return <ReportsView />;
   }
 }
 
@@ -96,8 +96,7 @@ export default function WorkbenchApp() {
   const [mItemForm, setMItemForm] = useState<{ parentId: string | null } | null>(null);
   const [mItemDetail, setMItemDetail] = useState<string | null>(null);
   const [mLabels, setMLabels] = useState(false);
-  const [mShortcuts, setMShortcuts] = useState(false);
-  const [mData, setMData] = useState(false);
+  const [mSettings, setMSettings] = useState(false);
   const [mCapture, setMCapture] = useState(false);
   const [mDailyPlan, setMDailyPlan] = useState(false);
   const [mTimebox, setMTimebox] = useState<{ id: string; date?: string } | null>(null);
@@ -183,7 +182,7 @@ export default function WorkbenchApp() {
       }
       if (mod && e.key === '/') {
         e.preventDefault();
-        setMShortcuts(true);
+        setMSettings(true);
         return;
       }
       if (mod && e.key.toLowerCase() === 'j') {
@@ -220,6 +219,11 @@ export default function WorkbenchApp() {
         setMItemForm({ parentId: null });
         return;
       }
+      if (key === ',' && !mod) {
+        e.preventDefault();
+        setMSettings(true);
+        return;
+      }
       if (key === 'g' && !mod) {
         if (gPressed) return;
         gPressed = true;
@@ -229,7 +233,7 @@ export default function WorkbenchApp() {
       }
       if (gPressed && !mod) {
         const map: Record<string, ViewId> = {
-          t: 'today', i: 'inbox', d: 'dashboard', g: 'goals', l: 'log',
+          t: 'today', i: 'inbox', d: 'dashboard', g: 'goals', l: 'reports',
           h: 'habits', j: 'journal', c: 'calendar', r: 'reports',
           b: 'library', m: 'roadmap', p: 'planner',
         };
@@ -267,13 +271,16 @@ export default function WorkbenchApp() {
         <Sidebar
           open={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
-          onOpenShortcuts={() => setMShortcuts(true)}
-          onOpenData={() => setMData(true)}
+          onOpenSettings={() => setMSettings(true)}
           onOpenPalette={() => setMPalette(true)}
         />
 
         <div className="wb-main">
-          <Topbar onMenu={() => setSidebarOpen(true)} onOpenPalette={() => setMPalette(true)} />
+          <Topbar
+            onMenu={() => setSidebarOpen(true)}
+            onOpenPalette={() => setMPalette(true)}
+            onOpenSettings={() => setMSettings(true)}
+          />
 
           <div className="wb-header">
             <h1 className="wb-display">{title}</h1>
@@ -324,8 +331,7 @@ export default function WorkbenchApp() {
           />
         )}
         <LabelsModal open={mLabels} onClose={() => setMLabels(false)} />
-        <ShortcutsModal open={mShortcuts} onClose={() => setMShortcuts(false)} />
-        <DataModal open={mData} onClose={() => setMData(false)} />
+        <SettingsModal open={mSettings} onClose={() => setMSettings(false)} onOpenPalette={() => setMPalette(true)} />
         <CaptureModal open={mCapture} onClose={() => setMCapture(false)} />
         {mDailyPlan && <DailyPlanModal onClose={() => setMDailyPlan(false)} />}
         {mTimebox && (
@@ -355,9 +361,8 @@ export default function WorkbenchApp() {
           open={mPalette}
           onClose={() => setMPalette(false)}
           onOpenLabels={() => setMLabels(true)}
-          onOpenData={() => setMData(true)}
+          onOpenSettings={() => setMSettings(true)}
           onOpenCapture={() => setMCapture(true)}
-          onOpenShortcuts={() => setMShortcuts(true)}
         />
 
         <ToastStack />

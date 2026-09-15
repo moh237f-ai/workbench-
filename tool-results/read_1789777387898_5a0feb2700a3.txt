@@ -1,0 +1,1310 @@
+     1→/* ==================== Workbench Aurora — Planner (Day & Week) ==================== */
+     2→/* All classes prefixed plan- · design tokens only (light / dark / prism) */
+     3→
+     4→/* ---------- shared scroll style ---------- */
+     5→.plan-scroll {
+     6→  scrollbar-width: thin;
+     7→  scrollbar-color: color-mix(in srgb, var(--muted2) 38%, transparent) transparent;
+     8→}
+     9→.plan-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+    10→.plan-scroll::-webkit-scrollbar-track { background: transparent; }
+    11→.plan-scroll::-webkit-scrollbar-thumb {
+    12→  background: color-mix(in srgb, var(--muted2) 34%, transparent);
+    13→  border: 2px solid transparent;
+    14→  background-clip: padding-box;
+    15→  border-radius: 99px;
+    16→}
+    17→.plan-scroll::-webkit-scrollbar-thumb:hover {
+    18→  background: color-mix(in srgb, var(--muted2) 52%, transparent);
+    19→  background-clip: padding-box;
+    20→}
+    21→
+    22→/* ---------- nav bar → compact date navigation ---------- */
+    23→.plan-nav {
+    24→  display: flex;
+    25→  align-items: center;
+    26→  justify-content: space-between;
+    27→  gap: 10px 16px;
+    28→  flex-wrap: wrap;
+    29→  margin-bottom: 14px;
+    30→}
+    31→.plan-datebar { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    32→.plan-datebar-label {
+    33→  display: flex;
+    34→  align-items: center;
+    35→  gap: 9px;
+    36→  min-width: 0;
+    37→  margin: 0 4px;
+    38→}
+    39→.plan-datebar-label > span:first-child {
+    40→  font-size: 15.5px;
+    41→  font-weight: 700;
+    42→  white-space: nowrap;
+    43→  overflow: hidden;
+    44→  text-overflow: ellipsis;
+    45→}
+    46→.plan-datebar-badge {
+    47→  padding: 2.5px 9px;
+    48→  border-radius: 99px;
+    49→  background: var(--pine-light);
+    50→  color: var(--pine);
+    51→  font-size: 10px;
+    52→  font-weight: 800;
+    53→  letter-spacing: 0.05em;
+    54→  text-transform: uppercase;
+    55→  flex-shrink: 0;
+    56→}
+    57→.plan-datebar-aux { display: flex; align-items: center; gap: 8px; }
+    58→.plan-today-chip {
+    59→  height: 38px;
+    60→  padding: 0 15px;
+    61→  border: 1px solid color-mix(in srgb, var(--pine) 32%, var(--hairline));
+    62→  border-radius: 99px;
+    63→  background: var(--pine-light);
+    64→  color: var(--pine);
+    65→  font-size: 12px;
+    66→  font-weight: 700;
+    67→  cursor: pointer;
+    68→  flex-shrink: 0;
+    69→  transition: all 0.15s var(--ease);
+    70→}
+    71→.plan-today-chip:hover { border-color: var(--pine); filter: brightness(1.02); }
+    72→.plan-today-chip:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+    73→
+    74→/* ---------- day grid: timeline + backlog ---------- */
+    75→.plan-day-grid {
+    76→  display: grid;
+    77→  grid-template-columns: minmax(0, 1fr) 330px;
+    78→  gap: 16px;
+    79→  align-items: start;
+    80→}
+    81→
+    82→/* ---------- timeline ---------- */
+    83→.plan-tl-card { padding: 14px 16px 12px; }
+    84→.plan-tl-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+    85→.plan-tl-count { font-size: 12.5px; font-weight: 650; color: var(--muted2); }
+    86→.plan-head-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+    87→.plan-done-chip { font-size: 10.5px; font-weight: 700; }
+    88→
+    89→.plan-tl-scroll {
+    90→  max-height: 72vh;
+    91→  overflow-y: auto;
+    92→  overscroll-behavior: contain;
+    93→  padding: 10px 4px 4px 0;
+    94→}
+    95→.plan-tl { position: relative; display: grid; grid-template-columns: 44px minmax(0, 1fr); }
+    96→.plan-tl-gutter { position: relative; }
+    97→.plan-tl-gutter > span {
+    98→  position: absolute;
+    99→  right: 10px;
+   100→  line-height: 1;
+   101→  font-size: 11px;
+   102→  font-weight: 600;
+   103→  color: var(--muted2);
+   104→}
+   105→.plan-tl-lanes {
+   106→  position: relative;
+   107→  overflow: hidden;
+   108→  border-left: 1px solid var(--hairline);
+   109→  border-radius: 0 10px 10px 0;
+   110→  background: color-mix(in srgb, var(--surface-solid) 40%, transparent);
+   111→  cursor: copy;
+   112→}
+   113→.plan-tl-lanes.droptarget {
+   114→  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--pine) 35%, transparent);
+   115→}
+   116→.plan-hour-line {
+   117→  position: absolute;
+   118→  left: 0;
+   119→  right: 0;
+   120→  border-top: 1px solid var(--hairline);
+   121→  pointer-events: none;
+   122→}
+   123→.plan-half-line {
+   124→  position: absolute;
+   125→  left: 0;
+   126→  right: 0;
+   127→  border-top: 1px dashed color-mix(in srgb, var(--ink) 8%, transparent);
+   128→  pointer-events: none;
+   129→}
+   130→
+   131→/* now line */
+   132→.plan-now {
+   133→  position: absolute;
+   134→  left: 0;
+   135→  right: 0;
+   136→  border-top: 2px solid var(--pine);
+   137→  z-index: 4;
+   138→  pointer-events: none;
+   139→}
+   140→.plan-now-bubble {
+   141→  position: absolute;
+   142→  left: 8px;
+   143→  top: -10px;
+   144→  padding: 2px 7px;
+   145→  border-radius: 7px;
+   146→  background: var(--pine);
+   147→  color: var(--surface-solid);
+   148→  font-size: 10.5px;
+   149→  font-weight: 800;
+   150→  letter-spacing: 0.02em;
+   151→  box-shadow: var(--shadow-sm);
+   152→}
+   153→
+   154→/* empty day hint */
+   155→.plan-empty {
+   156→  position: absolute;
+   157→  inset: 0;
+   158→  display: grid;
+   159→  place-items: center;
+   160→  text-align: center;
+   161→  padding: 0 24px;
+   162→  pointer-events: none;
+   163→  z-index: 1;
+   164→}
+   165→.plan-empty-title {
+   166→  font-family: var(--font-sora), var(--font-inter), sans-serif;
+   167→  font-size: 16px;
+   168→  font-weight: 700;
+   169→  color: var(--muted2);
+   170→}
+   171→.plan-empty-sub { margin-top: 5px; font-size: 12.5px; color: var(--faint); }
+   172→
+   173→/* ---------- blocks ---------- */
+   174→.plan-block {
+   175→  position: absolute;
+   176→  left: 7px;
+   177→  right: 9px;
+   178→  z-index: 2;
+   179→  border-radius: 10px;
+   180→  border: 1px solid var(--hairline);
+   181→  border-left: 3px solid var(--stripe, var(--pine));
+   182→  padding: 4px 9px 6px;
+   183→  cursor: grab;
+   184→  touch-action: none;
+   185→  user-select: none;
+   186→  -webkit-user-select: none;
+   187→  overflow: hidden;
+   188→  transition: box-shadow 0.15s var(--ease);
+   189→}
+   190→.plan-block:hover { box-shadow: var(--shadow-md); }
+   191→.plan-block.dragging { z-index: 10; cursor: grabbing; box-shadow: var(--shadow-lg); }
+   192→.plan-block-item { background: var(--pine-light); }
+   193→.plan-block-file { background: var(--violet-light); border-left-color: var(--violet); }
+   194→.plan-block.done { opacity: 0.6; }
+   195→.plan-block.done .plan-block-title { text-decoration: line-through; }
+   196→.plan-block-time {
+   197→  display: flex;
+   198→  align-items: center;
+   199→  gap: 4px;
+   200→  font-size: 10.5px;
+   201→  font-weight: 650;
+   202→  color: var(--muted2);
+   203→}
+   204→.plan-block-ico { color: var(--violet); }
+   205→.plan-block-title {
+   206→  margin-top: 1px;
+   207→  font-size: 12px;
+   208→  font-weight: 650;
+   209→  line-height: 1.25;
+   210→  white-space: nowrap;
+   211→  overflow: hidden;
+   212→  text-overflow: ellipsis;
+   213→}
+   214→.plan-block-file .plan-block-time,
+   215→.plan-block-file .plan-block-title { padding-right: 46px; }
+   216→
+   217→/* overlap flag (coral dashed outline + corner icon) */
+   218→.plan-block.plan-overlap {
+   219→  outline: 2px dashed color-mix(in srgb, var(--coral) 72%, transparent);
+   220→  outline-offset: -2px;
+   221→}
+   222→.plan-overlap-ico {
+   223→  position: absolute;
+   224→  right: 7px;
+   225→  bottom: 5px;
+   226→  display: grid;
+   227→  place-items: center;
+   228→  padding: 1.5px;
+   229→  border-radius: 5px;
+   230→  color: var(--coral);
+   231→  background: color-mix(in srgb, var(--surface-solid) 72%, transparent);
+   232→}
+   233→
+   234→/* pool-drag ghost block */
+   235→.plan-ghost {
+   236→  z-index: 9;
+   237→  opacity: 0.78;
+   238→  pointer-events: none;
+   239→  border: 1.5px dashed var(--pine);
+   240→  background: var(--pine-light);
+   241→  cursor: grabbing;
+   242→}
+   243→.plan-ghost-file { border-color: var(--violet); background: var(--violet-light); }
+   244→
+   245→/* resize handle */
+   246→.plan-block-resize {
+   247→  position: absolute;
+   248→  left: 0;
+   249→  right: 0;
+   250→  bottom: -5px;
+   251→  height: 15px;
+   252→  cursor: ns-resize;
+   253→  touch-action: none;
+   254→  opacity: 0;
+   255→  transition: opacity 0.12s;
+   256→}
+   257→.plan-block-resize::after {
+   258→  content: '';
+   259→  display: block;
+   260→  margin: 7px auto 0;
+   261→  width: 34px;
+   262→  height: 3px;
+   263→  border-radius: 3px;
+   264→  background: var(--pine);
+   265→}
+   266→.plan-block-file .plan-block-resize::after { background: var(--violet); }
+   267→.plan-block:hover .plan-block-resize,
+   268→.plan-block.dragging .plan-block-resize { opacity: 1; }
+   269→
+   270→/* reading-block controls */
+   271→.plan-check {
+   272→  position: absolute;
+   273→  top: 4px;
+   274→  right: 4px;
+   275→  width: 22px;
+   276→  height: 22px;
+   277→  display: grid;
+   278→  place-items: center;
+   279→  padding: 0;
+   280→  border-radius: 50%;
+   281→  border: 1.5px solid var(--violet);
+   282→  background: transparent;
+   283→  color: transparent;
+   284→  cursor: pointer;
+   285→  transition: all 0.15s var(--ease);
+   286→}
+   287→.plan-check:hover { background: var(--violet-light); }
+   288→.plan-check.on { background: var(--violet); color: var(--surface-solid); }
+   289→.plan-x {
+   290→  position: absolute;
+   291→  top: 4px;
+   292→  right: 28px;
+   293→  width: 20px;
+   294→  height: 20px;
+   295→  display: grid;
+   296→  place-items: center;
+   297→  padding: 0;
+   298→  border: none;
+   299→  border-radius: 6px;
+   300→  background: transparent;
+   301→  color: var(--muted2);
+   302→  cursor: pointer;
+   303→  opacity: 0;
+   304→  transition: opacity 0.12s, background 0.12s, color 0.12s;
+   305→}
+   306→.plan-block:hover .plan-x { opacity: 1; }
+   307→.plan-x:hover { background: var(--coral-light); color: var(--coral); }
+   308→
+   309→/* ---------- backlog side ---------- */
+   310→.plan-side { display: grid; gap: 14px; }
+   311→.plan-card { padding: 15px 17px; }
+   312→.plan-card-head {
+   313→  display: flex;
+   314→  align-items: center;
+   315→  justify-content: space-between;
+   316→  gap: 8px;
+   317→  margin-bottom: 10px;
+   318→}
+   319→.plan-card-title {
+   320→  font-family: var(--font-sora), var(--font-inter), sans-serif;
+   321→  font-size: 13.5px;
+   322→  font-weight: 700;
+   323→  letter-spacing: -0.01em;
+   324→}
+   325→.plan-card-count {
+   326→  min-width: 22px;
+   327→  height: 20px;
+   328→  padding: 0 5px;
+   329→  display: grid;
+   330→  place-items: center;
+   331→  border-radius: 99px;
+   332→  background: var(--surface-alt);
+   333→  color: var(--muted2);
+   334→  font-size: 11px;
+   335→  font-weight: 700;
+   336→}
+   337→.plan-cap-num { font-size: 11.5px; font-weight: 700; color: var(--muted2); }
+   338→
+   339→/* up next card */
+   340→.plan-un-row {
+   341→  display: flex;
+   342→  align-items: center;
+   343→  gap: 11px;
+   344→  width: 100%;
+   345→  padding: 10px 11px;
+   346→  border: 1px solid var(--hairline);
+   347→  border-radius: 12px;
+   348→  background: color-mix(in srgb, var(--surface-solid) 55%, transparent);
+   349→  cursor: pointer;
+   350→  text-align: left;
+   351→  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+   352→}
+   353→.plan-un-row:hover { border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline)); box-shadow: var(--shadow-sm); }
+   354→.plan-un-row:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+   355→.plan-un-main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+   356→.plan-un-kicker {
+   357→  font-size: 10px;
+   358→  font-weight: 800;
+   359→  letter-spacing: 0.08em;
+   360→  text-transform: uppercase;
+   361→  color: var(--muted2);
+   362→}
+   363→.plan-un-title {
+   364→  font-size: 13px;
+   365→  font-weight: 700;
+   366→  white-space: nowrap;
+   367→  overflow: hidden;
+   368→  text-overflow: ellipsis;
+   369→}
+   370→.plan-un-meta { font-size: 11px; font-weight: 600; color: var(--muted2); }
+   371→.plan-un-dot {
+   372→  width: 9px;
+   373→  height: 9px;
+   374→  border-radius: 50%;
+   375→  background: var(--pine);
+   376→  flex-shrink: 0;
+   377→  animation: planPulse 1.8s var(--ease) infinite;
+   378→}
+   379→.plan-un-go { color: var(--faint); flex-shrink: 0; transition: color 0.15s var(--ease); }
+   380→.plan-un-row:hover .plan-un-go { color: var(--pine); }
+   381→.plan-un-empty { padding: 12px 4px; font-size: 12.5px; color: var(--faint); text-align: center; }
+   382→@keyframes planPulse {
+   383→  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pine) 45%, transparent); }
+   384→  70% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--pine) 0%, transparent); }
+   385→  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pine) 0%, transparent); }
+   386→}
+   387→
+   388→/* capacity meter */
+   389→.plan-meter {
+   390→  height: 10px;
+   391→  border-radius: 99px;
+   392→  background: var(--surface-alt);
+   393→  box-shadow: inset 0 0 0 1px var(--hairline);
+   394→  overflow: hidden;
+   395→}
+   396→.plan-meter > span {
+   397→  display: block;
+   398→  height: 100%;
+   399→  border-radius: 99px;
+   400→  background: linear-gradient(90deg, var(--pine), var(--aurora-3));
+   401→  transition: width 0.45s var(--ease);
+   402→}
+   403→.plan-meter.over > span { background: linear-gradient(90deg, var(--coral), var(--amber)); }
+   404→.plan-meter-note { margin-top: 7px; font-size: 11.5px; color: var(--muted2); }
+   405→.plan-meter-note.over { color: var(--coral); font-weight: 650; }
+   406→.plan-meter-sm { height: 5px; }
+   407→.plan-free { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
+   408→.plan-free-lab { font-size: 11px; font-weight: 650; color: var(--muted2); white-space: nowrap; }
+   409→
+   410→/* suggested / reading rows */
+   411→.plan-sug-list {
+   412→  display: grid;
+   413→  gap: 8px;
+   414→  max-height: 288px;
+   415→  overflow-y: auto;
+   416→  overscroll-behavior: contain;
+   417→  padding-right: 4px;
+   418→}
+   419→.plan-sug-row {
+   420→  display: flex;
+   421→  align-items: center;
+   422→  gap: 10px;
+   423→  min-height: 46px;
+   424→  padding: 7px 9px;
+   425→  border: 1px solid var(--hairline);
+   426→  border-radius: 12px;
+   427→  background: color-mix(in srgb, var(--surface-solid) 55%, transparent);
+   428→  transition: border-color 0.15s var(--ease), opacity 0.15s var(--ease);
+   429→}
+   430→.plan-sug-row:hover { border-color: color-mix(in srgb, var(--pine) 28%, var(--hairline)); }
+   431→.plan-sug-row.dragging { opacity: 0.5; }
+   432→.plan-sug-grip {
+   433→  width: 24px;
+   434→  height: 36px;
+   435→  display: grid;
+   436→  place-items: center;
+   437→  padding: 0;
+   438→  border: none;
+   439→  border-radius: 8px;
+   440→  background: transparent;
+   441→  color: var(--faint);
+   442→  cursor: grab;
+   443→  touch-action: none;
+   444→  user-select: none;
+   445→  -webkit-user-select: none;
+   446→  flex-shrink: 0;
+   447→  transition: color 0.12s, background 0.12s;
+   448→}
+   449→.plan-sug-grip:hover { color: var(--pine); background: var(--surface-alt); }
+   450→.plan-sug-grip:active { cursor: grabbing; }
+   451→.plan-sug-grip:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+   452→.plan-read-ico { color: var(--violet); flex-shrink: 0; }
+   453→.plan-sug-main { min-width: 0; flex: 1; display: grid; gap: 4px; }
+   454→.plan-sug-title {
+   455→  font-size: 12.5px;
+   456→  font-weight: 650;
+   457→  white-space: nowrap;
+   458→  overflow: hidden;
+   459→  text-overflow: ellipsis;
+   460→}
+   461→.plan-sug-chips { display: flex; gap: 5px; flex-wrap: wrap; }
+   462→.plan-side-empty { padding: 14px 4px; font-size: 12.5px; color: var(--faint); text-align: center; }
+   463→.plan-autop-note {
+   464→  margin: 0 0 12px;
+   465→  font-size: 12px;
+   466→  line-height: 1.45;
+   467→  color: var(--muted2);
+   468→}
+   469→
+   470→/* ---------- week mode ---------- */
+   471→.plan-week { display: grid; gap: 12px; }
+   472→
+   473→.plan-wk-head {
+   474→  display: grid;
+   475→  grid-template-columns: repeat(7, minmax(0, 1fr));
+   476→  gap: 6px;
+   477→}
+   478→.plan-wk-dayhead {
+   479→  display: flex;
+   480→  flex-direction: column;
+   481→  align-items: center;
+   482→  gap: 2px;
+   483→  padding: 7px 4px 8px;
+   484→  border: 1px solid transparent;
+   485→  border-radius: 12px;
+   486→  background: var(--surface);
+   487→  cursor: pointer;
+   488→  transition: all 0.15s var(--ease);
+   489→}
+   490→.plan-wk-dayhead:hover {
+   491→  border-color: var(--hairline);
+   492→  transform: translateY(-1px);
+   493→}
+   494→.plan-wk-dayhead.today {
+   495→  border-color: color-mix(in srgb, var(--pine) 40%, var(--hairline));
+   496→  background: var(--pine-light);
+   497→}
+   498→.plan-wk-dow {
+   499→  font-size: 10px;
+   500→  text-transform: uppercase;
+   501→  letter-spacing: 0.09em;
+   502→  font-weight: 750;
+   503→  color: var(--muted2);
+   504→}
+   505→.plan-wk-dayhead.today .plan-wk-dow { color: var(--pine); }
+   506→.plan-wk-num { font-size: 15px; font-weight: 750; color: var(--ink); }
+   507→.plan-wk-dayhead.today .plan-wk-num { color: var(--pine); }
+   508→.plan-wk-daytotal { font-size: 10px; font-weight: 650; color: var(--muted2); }
+   509→
+   510→.plan-wk-cols {
+   511→  display: grid;
+   512→  grid-template-columns: repeat(7, minmax(0, 1fr));
+   513→  gap: 6px;
+   514→}
+   515→.plan-wk-col {
+   516→  display: flex;
+   517→  flex-direction: column;
+   518→  gap: 5px;
+   519→  min-height: 320px;
+   520→  max-height: 60vh;
+   521→  overflow-y: auto;
+   522→  overscroll-behavior: contain;
+   523→  padding: 6px;
+   524→  border: 1px solid var(--hairline);
+   525→  border-radius: 12px;
+   526→  background: var(--surface);
+   527→  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+   528→}
+   529→.plan-wk-col.today { border-color: color-mix(in srgb, var(--pine) 36%, var(--hairline)); }
+   530→.plan-wk-col.drop {
+   531→  border-color: var(--pine);
+   532→  background: var(--pine-light);
+   533→  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pine) 40%, transparent);
+   534→}
+   535→
+   536→/* all-day due chips */
+   537→.plan-wk-all { display: grid; gap: 4px; }
+   538→.plan-wk-due {
+   539→  display: block;
+   540→  width: 100%;
+   541→  min-height: 24px;
+   542→  padding: 4px 8px;
+   543→  border: none;
+   544→  border-radius: 8px;
+   545→  background: var(--amber-light);
+   546→  color: var(--amber);
+   547→  font-size: 10.5px;
+   548→  font-weight: 700;
+   549→  text-align: left;
+   550→  cursor: pointer;
+   551→  white-space: nowrap;
+   552→  overflow: hidden;
+   553→  text-overflow: ellipsis;
+   554→}
+   555→.plan-wk-due:hover { filter: brightness(1.05); }
+   556→.plan-wk-due.past { background: var(--coral-light); color: var(--coral); }
+   557→.plan-wk-due.file { background: var(--violet-light); color: var(--violet); }
+   558→
+   559→/* compact block rows */
+   560→.plan-wk-rows { display: grid; gap: 4px; align-content: start; }
+   561→.plan-wk-row {
+   562→  display: flex;
+   563→  align-items: center;
+   564→  gap: 6px;
+   565→  min-height: 32px;
+   566→  padding: 3px 6px;
+   567→  border: 1px solid transparent;
+   568→  border-radius: 8px;
+   569→  cursor: pointer;
+   570→}
+   571→.plan-wk-row[draggable='true'] { cursor: grab; }
+   572→.plan-wk-row[draggable='true']:active { cursor: grabbing; }
+   573→.plan-wk-row:hover {
+   574→  background: var(--surface-alt);
+   575→  border-color: var(--hairline);
+   576→}
+   577→.plan-wk-row:focus-visible { outline: 2px solid var(--pine); outline-offset: -1px; }
+   578→.plan-wk-row.done .plan-wk-label { text-decoration: line-through; opacity: 0.6; }
+   579→.plan-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+   580→.plan-dot.pine { background: var(--pine); }
+   581→.plan-dot.violet { background: var(--violet); }
+   582→.plan-wk-time { font-size: 10px; font-weight: 700; color: var(--muted2); flex-shrink: 0; }
+   583→.plan-wk-label {
+   584→  font-size: 11px;
+   585→  font-weight: 600;
+   586→  min-width: 0;
+   587→  white-space: nowrap;
+   588→  overflow: hidden;
+   589→  text-overflow: ellipsis;
+   590→}
+   591→.plan-wk-moves {
+   592→  margin-left: auto;
+   593→  display: flex;
+   594→  gap: 2px;
+   595→  flex-shrink: 0;
+   596→  opacity: 0;
+   597→  transition: opacity 0.12s;
+   598→}
+   599→.plan-wk-row:hover .plan-wk-moves,
+   600→.plan-wk-row:focus-within .plan-wk-moves { opacity: 1; }
+   601→.plan-wk-moves button {
+   602→  width: 22px;
+   603→  height: 24px;
+   604→  display: grid;
+   605→  place-items: center;
+   606→  padding: 0;
+   607→  border: none;
+   608→  border-radius: 6px;
+   609→  background: transparent;
+   610→  color: var(--muted2);
+   611→  cursor: pointer;
+   612→  transition: all 0.12s;
+   613→}
+   614→.plan-wk-moves button:hover {
+   615→  background: var(--surface-solid);
+   616→  color: var(--ink);
+   617→  box-shadow: var(--shadow-sm);
+   618→}
+   619→.plan-wk-moves .plan-wk-x:hover { color: var(--coral); }
+   620→.plan-wk-free { padding: 10px 0; text-align: center; color: var(--faint); font-size: 11px; }
+   621→
+   622→/* week footer — per-day bars */
+   623→.plan-wk-foot {
+   624→  display: flex;
+   625→  align-items: center;
+   626→  gap: 22px;
+   627→  flex-wrap: wrap;
+   628→  padding: 14px 20px;
+   629→}
+   630→.plan-wk-bars {
+   631→  display: flex;
+   632→  align-items: flex-end;
+   633→  gap: 9px;
+   634→  height: 78px;
+   635→  flex: 1;
+   636→  min-width: 240px;
+   637→}
+   638→.plan-wk-bar-col {
+   639→  flex: 1;
+   640→  min-width: 0;
+   641→  height: 100%;
+   642→  display: flex;
+   643→  flex-direction: column;
+   644→  align-items: center;
+   645→  justify-content: flex-end;
+   646→  gap: 5px;
+   647→}
+   648→.plan-wk-bar {
+   649→  width: 100%;
+   650→  max-width: 36px;
+   651→  height: 52px;
+   652→  border-radius: 7px;
+   653→  background: var(--surface-alt);
+   654→  box-shadow: inset 0 0 0 1px var(--hairline);
+   655→  display: flex;
+   656→  flex-direction: column;
+   657→  justify-content: flex-end;
+   658→  overflow: hidden;
+   659→}
+   660→.plan-wk-bar-col.today .plan-wk-bar {
+   661→  outline: 2px solid var(--pine);
+   662→  outline-offset: 1px;
+   663→}
+   664→.plan-wk-bar > span { display: flex; flex-direction: column; width: 100%; }
+   665→.plan-wk-bar i { display: block; width: 100%; }
+   666→.plan-wk-bar i.bi { background: var(--pine); }
+   667→.plan-wk-bar i.bf { background: var(--violet); }
+   668→.plan-wk-bar-l {
+   669→  font-size: 9.5px;
+   670→  font-weight: 750;
+   671→  text-transform: uppercase;
+   672→  color: var(--faint);
+   673→}
+   674→.plan-wk-bar-col.today .plan-wk-bar-l { color: var(--pine); }
+   675→.plan-wk-totals { font-size: 12px; font-weight: 700; color: var(--muted2); }
+   676→
+   677→/* ---------- responsive ---------- */
+   678→@media (max-width: 980px) {
+   679→  .plan-day-grid { grid-template-columns: 1fr; }
+   680→  .plan-wk-head,
+   681→  .plan-wk-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+   682→  .plan-wk-col { min-height: 240px; max-height: 46vh; }
+   683→  .plan-tl-scroll { max-height: 62vh; }
+   684→  .plan-datebar-label > span:first-child { font-size: 14.5px; }
+   685→}
+   686→
+   687→@media (max-width: 640px) {
+   688→  .plan-wk-daytotal { display: none; }
+   689→  .plan-today-chip { padding: 0 12px; }
+   690→}
+   691→
+   692→/* touch devices: no hover — keep controls visible, bigger targets */
+   693→@media (hover: none) {
+   694→  .plan-x { opacity: 1; }
+   695→  .plan-block-resize { opacity: 0.85; }
+   696→  .plan-wk-moves { opacity: 1; }
+   697→}
+   698→
+   699→@media (pointer: coarse) {
+   700→  .plan-datebar .icon-btn,
+   701→  .plan-head-actions .icon-btn { width: 44px; height: 44px; }
+   702→  .plan-today-chip { height: 44px; }
+   703→  .plan-sug-grip { width: 44px; }
+   704→}
+   705→
+   706→/* ---------- reduced motion ---------- */
+   707→@media (prefers-reduced-motion: reduce) {
+   708→  .plan-block,
+   709→  .plan-meter > span,
+   710→  .plan-wk-moves,
+   711→  .plan-wk-dayhead,
+   712→  .plan-wk-col { transition: none; }
+   713→  .plan-wk-dayhead:hover { transform: none; }
+   714→  .plan-un-dot { animation: none; }
+   715→}
+   716→
+   717→/* ================================================================
+   718→   v3 — add-block panel · goals & roadmaps bridge · habit strip
+   719→   ================================================================ */
+   720→
+   721→/* ---------- backdrop + wide panel (portaled to body) ---------- */
+   722→.plan-add-backdrop {
+   723→  position: fixed;
+   724→  inset: 0;
+   725→  z-index: 240;
+   726→  background: rgba(6, 12, 9, 0.28);
+   727→  backdrop-filter: blur(3px);
+   728→  -webkit-backdrop-filter: blur(3px);
+   729→  animation: planFadeIn 0.16s ease-out;
+   730→}
+   731→.plan-add {
+   732→  position: fixed;
+   733→  z-index: 250;
+   734→  width: min(420px, 92vw);
+   735→  max-height: min(88vh, 720px);
+   736→  overflow-y: auto;
+   737→  overscroll-behavior: contain;
+   738→  padding: 18px 20px 16px;
+   739→  border-radius: 18px;
+   740→  border: 1px solid var(--hairline);
+   741→  background: var(--surface-solid);
+   742→  box-shadow: var(--shadow-lg);
+   743→  display: grid;
+   744→  gap: 14px;
+   745→  align-content: start;
+   746→  outline: none;
+   747→  animation: planAddIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+   748→}
+   749→@keyframes planAddIn {
+   750→  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+   751→  to { opacity: 1; transform: none; }
+   752→}
+   753→@keyframes planFadeIn {
+   754→  from { opacity: 0; }
+   755→  to { opacity: 1; }
+   756→}
+   757→@keyframes planSheetIn {
+   758→  from { opacity: 0.5; transform: translateY(48px); }
+   759→  to { opacity: 1; transform: none; }
+   760→}
+   761→
+   762→.plan-add-head { display: flex; align-items: center; gap: 10px; }
+   763→.plan-add-title {
+   764→  flex: 1;
+   765→  min-width: 0;
+   766→  font-family: var(--font-sora), var(--font-inter), sans-serif;
+   767→  font-size: 15.5px;
+   768→  font-weight: 750;
+   769→  letter-spacing: -0.01em;
+   770→}
+   771→.plan-add-x {
+   772→  width: 28px;
+   773→  height: 28px;
+   774→  display: grid;
+   775→  place-items: center;
+   776→  padding: 0;
+   777→  border: none;
+   778→  border-radius: 8px;
+   779→  background: transparent;
+   780→  color: var(--muted2);
+   781→  cursor: pointer;
+   782→  flex-shrink: 0;
+   783→  transition: all 0.12s;
+   784→}
+   785→.plan-add-x:hover { background: var(--coral-light); color: var(--coral); }
+   786→.plan-add-x:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+   787→
+   788→/* live summary chip (date · range · duration) */
+   789→.plan-add-sum {
+   790→  display: inline-flex;
+   791→  align-items: center;
+   792→  gap: 6px;
+   793→  align-self: start;
+   794→  padding: 6px 11px;
+   795→  border-radius: 9px;
+   796→  background: var(--pine-light);
+   797→  color: var(--pine);
+   798→  font-size: 11.5px;
+   799→  font-weight: 700;
+   800→}
+   801→
+   802→/* sections + micro labels */
+   803→.plan-add-sec { display: grid; gap: 9px; }
+   804→.plan-add-lab {
+   805→  font-size: 10.5px;
+   806→  font-weight: 800;
+   807→  letter-spacing: 0.08em;
+   808→  text-transform: uppercase;
+   809→  color: var(--muted2);
+   810→}
+   811→.plan-add-lab-alt {
+   812→  text-transform: none;
+   813→  letter-spacing: 0;
+   814→  font-weight: 600;
+   815→  color: var(--faint);
+   816→}
+   817→
+   818→/* title input (spacious) */
+   819→.plan-add-input {
+   820→  width: 100%;
+   821→  height: 42px;
+   822→  padding: 0 13px;
+   823→  border: 1px solid var(--hairline);
+   824→  border-radius: 11px;
+   825→  background: var(--surface-alt);
+   826→  color: var(--ink);
+   827→  font-family: inherit;
+   828→  font-size: 14px;
+   829→  font-weight: 650;
+   830→  outline: none;
+   831→  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+   832→}
+   833→.plan-add-input::placeholder { color: var(--faint); font-weight: 500; }
+   834→.plan-add-input:focus { border-color: var(--pine); box-shadow: 0 0 0 3px var(--pine-light); }
+   835→
+   836→/* picked-task card (replaces the title input once a task is chosen) */
+   837→.plan-add-sel {
+   838→  display: flex;
+   839→  align-items: center;
+   840→  gap: 10px;
+   841→  padding: 10px 12px;
+   842→  border: 1px solid color-mix(in srgb, var(--pine) 35%, var(--hairline));
+   843→  border-radius: 12px;
+   844→  background: var(--pine-light);
+   845→}
+   846→.plan-add-sel-ico { color: var(--pine); flex-shrink: 0; }
+   847→.plan-add-sel-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+   848→.plan-add-sel-title {
+   849→  font-size: 13px;
+   850→  font-weight: 700;
+   851→  white-space: nowrap;
+   852→  overflow: hidden;
+   853→  text-overflow: ellipsis;
+   854→}
+   855→.plan-add-sel-chips { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+   856→.plan-add-sel-chips .chip { font-size: 10px; padding: 2px 7px; }
+   857→.plan-add-sel-x {
+   858→  width: 26px;
+   859→  height: 26px;
+   860→  display: grid;
+   861→  place-items: center;
+   862→  padding: 0;
+   863→  border: none;
+   864→  border-radius: 8px;
+   865→  background: transparent;
+   866→  color: var(--muted2);
+   867→  cursor: pointer;
+   868→  flex-shrink: 0;
+   869→  transition: all 0.12s;
+   870→}
+   871→.plan-add-sel-x:hover { background: var(--coral-light); color: var(--coral); }
+   872→.plan-add-sel-x:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+   873→
+   874→/* time row */
+   875→.plan-add-timerow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+   876→.plan-add-timelab { font-size: 11.5px; font-weight: 650; color: var(--muted2); }
+   877→.plan-add-time {
+   878→  height: 38px;
+   879→  padding: 0 9px;
+   880→  border: 1px solid var(--hairline);
+   881→  border-radius: 10px;
+   882→  background: var(--surface-alt);
+   883→  color: var(--ink);
+   884→  font-size: 13px;
+   885→  font-weight: 700;
+   886→  color-scheme: light;
+   887→  outline: none;
+   888→  cursor: pointer;
+   889→  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+   890→}
+   891→.plan-add-time:hover { border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline)); }
+   892→.plan-add-time:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+   893→.dark .plan-add-time,
+   894→.prism .plan-add-time { color-scheme: dark; }
+   895→.plan-add-arrow { color: var(--faint); font-weight: 700; }
+   896→
+   897→/* duration: segmented presets + custom stepper */
+   898→.plan-add-dur { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+   899→.plan-add-step { display: inline-flex; align-items: center; gap: 4px; }
+   900→.plan-add-step button {
+   901→  width: 30px;
+   902→  height: 34px;
+   903→  display: grid;
+   904→  place-items: center;
+   905→  padding: 0;
+   906→  border: 1px solid var(--hairline);
+   907→  border-radius: 9px;
+   908→  background: var(--surface-alt);
+   909→  color: var(--muted2);
+   910→  cursor: pointer;
+   911→  transition: all 0.12s var(--ease);
+   912→}
+   913→.plan-add-step button:hover {
+   914→  color: var(--pine);
+   915→  border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline));
+   916→}
+   917→.plan-add-step button:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+   918→.plan-add-step input {
+   919→  width: 58px;
+   920→  height: 34px;
+   921→  padding: 0 6px;
+   922→  border: 1px solid var(--hairline);
+   923→  border-radius: 9px;
+   924→  background: var(--surface-alt);
+   925→  color: var(--ink);
+   926→  font-family: var(--font-jetbrains), monospace;
+   927→  font-size: 12.5px;
+   928→  font-weight: 700;
+   929→  text-align: center;
+   930→  outline: none;
+   931→  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+   932→}
+   933→.plan-add-step input:focus { border-color: var(--pine); box-shadow: 0 0 0 3px var(--pine-light); }
+   934→.plan-add-step-lab { font-size: 11px; font-weight: 650; color: var(--muted2); }
+   935→
+   936→/* type chooser (2×2, icon + label) */
+   937→.plan-add-types {
+   938→  display: grid;
+   939→  grid-template-columns: repeat(2, minmax(0, 1fr));
+   940→  gap: 7px;
+   941→}
+   942→.plan-add-type {
+   943→  display: flex;
+   944→  align-items: center;
+   945→  gap: 9px;
+   946→  min-height: 44px;
+   947→  padding: 9px 12px;
+   948→  border: 1px solid var(--hairline);
+   949→  border-radius: 12px;
+   950→  background: var(--surface-alt);
+   951→  color: var(--muted2);
+   952→  font-family: inherit;
+   953→  font-size: 12.5px;
+   954→  font-weight: 700;
+   955→  text-align: left;
+   956→  cursor: pointer;
+   957→  transition: all 0.14s var(--ease);
+   958→}
+   959→.plan-add-type svg { flex-shrink: 0; }
+   960→.plan-add-type:hover {
+   961→  border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline));
+   962→  color: var(--ink);
+   963→}
+   964→.plan-add-type:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+   965→.plan-add-type.sel {
+   966→  border-color: color-mix(in srgb, var(--pine) 55%, var(--hairline));
+   967→  background: var(--pine-light);
+   968→  color: var(--pine);
+   969→  box-shadow: 0 0 0 2.5px var(--pine-light);
+   970→}
+   971→.plan-add-type[data-k='reading'].sel {
+   972→  border-color: color-mix(in srgb, var(--violet) 55%, var(--hairline));
+   973→  background: var(--violet-light);
+   974→  color: var(--violet);
+   975→  box-shadow: 0 0 0 2.5px var(--violet-light);
+   976→}
+   977→.plan-add-type[data-k='habit'].sel {
+   978→  border-color: color-mix(in srgb, var(--amber) 55%, var(--hairline));
+   979→  background: var(--amber-light);
+   980→  color: var(--amber);
+   981→  box-shadow: 0 0 0 2.5px var(--amber-light);
+   982→}
+   983→
+   984→/* search box + pick lists (enlarged, comfortable rows) */
+   985→.plan-add-search {
+   986→  display: flex;
+   987→  align-items: center;
+   988→  gap: 8px;
+   989→  height: 36px;
+   990→  padding: 0 11px;
+   991→  border: 1px solid var(--hairline);
+   992→  border-radius: 10px;
+   993→  background: var(--surface-alt);
+   994→  color: var(--muted2);
+   995→  transition: border-color 0.15s var(--ease);
+   996→}
+   997→.plan-add-search:focus-within { border-color: var(--pine); }
+   998→.plan-add-search input {
+   999→  flex: 1;
+  1000→  min-width: 0;
+  1001→  border: none;
+  1002→  background: transparent;
+  1003→  color: var(--ink);
+  1004→  font-family: inherit;
+  1005→  font-size: 12.5px;
+  1006→  outline: none;
+  1007→}
+  1008→.plan-add-search input::placeholder { color: var(--faint); }
+  1009→.plan-add-list {
+  1010→  display: grid;
+  1011→  gap: 5px;
+  1012→  max-height: 236px;
+  1013→  overflow-y: auto;
+  1014→  overscroll-behavior: contain;
+  1015→  padding-right: 4px;
+  1016→}
+  1017→.plan-add-row {
+  1018→  display: flex;
+  1019→  align-items: center;
+  1020→  gap: 10px;
+  1021→  width: 100%;
+  1022→  min-height: 46px;
+  1023→  padding: 7px 11px;
+  1024→  border: 1px solid var(--hairline);
+  1025→  border-radius: 11px;
+  1026→  background: transparent;
+  1027→  color: var(--ink);
+  1028→  font-family: inherit;
+  1029→  text-align: left;
+  1030→  cursor: pointer;
+  1031→  transition: all 0.12s var(--ease);
+  1032→}
+  1033→.plan-add-row:hover { border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline)); }
+  1034→.plan-add-row:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+  1035→.plan-add-row.sel { border-color: var(--pine); background: var(--pine-light); }
+  1036→.plan-add-row-ico { color: var(--pine); flex-shrink: 0; }
+  1037→.plan-add-row-ico.violet { color: var(--violet); }
+  1038→.plan-add-row-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+  1039→.plan-add-row-title {
+  1040→  font-size: 12.5px;
+  1041→  font-weight: 650;
+  1042→  white-space: nowrap;
+  1043→  overflow: hidden;
+  1044→  text-overflow: ellipsis;
+  1045→}
+  1046→.plan-add-row-sub { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  1047→.plan-add-row-sub .chip { font-size: 10px; padding: 2px 7px; }
+  1048→.plan-add-row-goal {
+  1049→  display: inline-flex;
+  1050→  align-items: center;
+  1051→  gap: 4px;
+  1052→  min-width: 0;
+  1053→  max-width: 100%;
+  1054→  font-size: 10.5px;
+  1055→  font-weight: 600;
+  1056→  color: var(--muted2);
+  1057→  white-space: nowrap;
+  1058→  overflow: hidden;
+  1059→  text-overflow: ellipsis;
+  1060→}
+  1061→.plan-add-row-goal svg { flex-shrink: 0; color: var(--faint); }
+  1062→.plan-add-none { padding: 12px 4px; font-size: 12px; color: var(--faint); text-align: center; }
+  1063→.plan-add-sub { display: grid; gap: 8px; margin-top: 2px; }
+  1064→
+  1065→/* habit info box inside the panel */
+  1066→.plan-add-habit {
+  1067→  display: grid;
+  1068→  gap: 10px;
+  1069→  padding: 13px 14px;
+  1070→  border: 1px dashed color-mix(in srgb, var(--amber) 40%, var(--hairline));
+  1071→  border-radius: 12px;
+  1072→  background: color-mix(in srgb, var(--amber) 7%, transparent);
+  1073→}
+  1074→.plan-add-habit-ico { color: var(--amber); }
+  1075→.plan-add-habit-txt { margin: 0; font-size: 12px; line-height: 1.55; color: var(--muted2); }
+  1076→.plan-add-habit-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  1077→.plan-add-habit-lab { font-size: 12px; font-weight: 650; color: var(--ink); }
+  1078→
+  1079→/* foot */
+  1080→.plan-add-foot {
+  1081→  display: flex;
+  1082→  align-items: center;
+  1083→  justify-content: flex-end;
+  1084→  gap: 8px;
+  1085→  margin-top: 2px;
+  1086→}
+  1087→
+  1088→/* ---------- side sections: From goals / From roadmaps (collapsible) ---------- */
+  1089→.plan-coll { background: var(--surface); }
+  1090→.plan-coll-ico { color: var(--pine); flex-shrink: 0; }
+  1091→.plan-coll-title {
+  1092→  flex: 1;
+  1093→  min-width: 0;
+  1094→  font-family: var(--font-sora), var(--font-inter), sans-serif;
+  1095→  font-size: 13.5px;
+  1096→  font-weight: 700;
+  1097→  letter-spacing: -0.01em;
+  1098→  text-align: left;
+  1099→}
+  1100→.plan-coll .wb-coll-body { padding: 0 16px 14px; }
+  1101→.plan-src-list { display: grid; gap: 8px; }
+  1102→.plan-src-row { display: flex; align-items: center; gap: 8px; }
+  1103→.plan-src-main {
+  1104→  flex: 1;
+  1105→  min-width: 0;
+  1106→  display: grid;
+  1107→  gap: 4px;
+  1108→  padding: 0;
+  1109→  border: none;
+  1110→  background: none;
+  1111→  text-align: left;
+  1112→  color: var(--ink);
+  1113→  cursor: pointer;
+  1114→}
+  1115→.plan-src-main:hover .plan-src-title { color: var(--pine); }
+  1116→.plan-src-main:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; border-radius: 6px; }
+  1117→.plan-src-title {
+  1118→  font-size: 12.5px;
+  1119→  font-weight: 650;
+  1120→  white-space: nowrap;
+  1121→  overflow: hidden;
+  1122→  text-overflow: ellipsis;
+  1123→  transition: color 0.13s var(--ease);
+  1124→}
+  1125→.plan-src-chips { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  1126→.plan-src-chips .chip { font-size: 10px; padding: 2px 7px; }
+  1127→.plan-src-next {
+  1128→  display: inline-flex;
+  1129→  align-items: center;
+  1130→  gap: 4px;
+  1131→  min-width: 0;
+  1132→  max-width: 100%;
+  1133→  font-size: 10.5px;
+  1134→  font-weight: 600;
+  1135→  color: var(--muted2);
+  1136→  white-space: nowrap;
+  1137→  overflow: hidden;
+  1138→  text-overflow: ellipsis;
+  1139→}
+  1140→.plan-src-next svg { flex-shrink: 0; color: var(--pine); }
+  1141→
+  1142→/* ---------- habit strip under the day timeline ---------- */
+  1143→.plan-hab-chip {
+  1144→  display: inline-flex;
+  1145→  align-items: center;
+  1146→  gap: 5px;
+  1147→  height: 26px;
+  1148→  padding: 0 11px;
+  1149→  border: 1px solid var(--hairline);
+  1150→  border-radius: 99px;
+  1151→  background: var(--surface-alt);
+  1152→  color: var(--muted2);
+  1153→  font-family: inherit;
+  1154→  font-size: 11px;
+  1155→  font-weight: 700;
+  1156→  cursor: pointer;
+  1157→  flex-shrink: 0;
+  1158→  transition: all 0.14s var(--ease);
+  1159→}
+  1160→.plan-hab-chip:hover {
+  1161→  border-color: color-mix(in srgb, var(--amber) 40%, var(--hairline));
+  1162→  color: var(--ink);
+  1163→}
+  1164→.plan-hab-chip.on {
+  1165→  background: var(--amber-light);
+  1166→  border-color: color-mix(in srgb, var(--amber) 45%, var(--hairline));
+  1167→  color: var(--amber);
+  1168→}
+  1169→.plan-hab-chip:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  1170→
+  1171→.plan-habits {
+  1172→  display: grid;
+  1173→  gap: 6px;
+  1174→  margin-top: 10px;
+  1175→  padding-top: 10px;
+  1176→  border-top: 1px solid var(--hairline);
+  1177→}
+  1178→.plan-hab-head { display: flex; align-items: center; gap: 10px; }
+  1179→.plan-hab-head-lab {
+  1180→  flex: 1;
+  1181→  min-width: 0;
+  1182→  font-size: 9.5px;
+  1183→  font-weight: 800;
+  1184→  text-transform: uppercase;
+  1185→  letter-spacing: 0.08em;
+  1186→  color: var(--faint);
+  1187→  white-space: nowrap;
+  1188→  overflow: hidden;
+  1189→  text-overflow: ellipsis;
+  1190→}
+  1191→.plan-hab-row { display: flex; align-items: center; gap: 10px; min-height: 34px; }
+  1192→.plan-hab-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; }
+  1193→.plan-hab-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  1194→.plan-hab-title {
+  1195→  font-size: 12px;
+  1196→  font-weight: 650;
+  1197→  white-space: nowrap;
+  1198→  overflow: hidden;
+  1199→  text-overflow: ellipsis;
+  1200→}
+  1201→.plan-hab-days {
+  1202→  display: grid;
+  1203→  grid-template-columns: repeat(7, 30px);
+  1204→  gap: 4px;
+  1205→  flex-shrink: 0;
+  1206→}
+  1207→.plan-hab-hd {
+  1208→  display: grid;
+  1209→  place-items: center;
+  1210→  font-size: 9.5px;
+  1211→  font-weight: 750;
+  1212→  text-transform: uppercase;
+  1213→  color: var(--faint);
+  1214→}
+  1215→.plan-hab-hd.cur { color: var(--amber); }
+  1216→.plan-hab-day {
+  1217→  position: relative;
+  1218→  width: 30px;
+  1219→  height: 28px;
+  1220→  display: grid;
+  1221→  place-items: center;
+  1222→  padding: 0;
+  1223→  border: 1px solid var(--hairline);
+  1224→  border-radius: 8px;
+  1225→  background: var(--surface-alt);
+  1226→  color: #fff;
+  1227→  cursor: pointer;
+  1228→  transition: all 0.13s var(--ease);
+  1229→}
+  1230→.plan-hab-day:hover { border-color: color-mix(in srgb, var(--amber) 45%, var(--hairline)); }
+  1231→.plan-hab-day:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+  1232→.plan-hab-day.done {
+  1233→  background: var(--hab, var(--amber));
+  1234→  border-color: var(--hab, var(--amber));
+  1235→}
+  1236→.plan-hab-day.cur { box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 32%, transparent); }
+  1237→.plan-hab-day.cur.done {
+  1238→  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hab, var(--amber)) 35%, transparent);
+  1239→}
+  1240→.plan-hab-day.today::after {
+  1241→  content: '';
+  1242→  position: absolute;
+  1243→  bottom: 3px;
+  1244→  left: 50%;
+  1245→  transform: translateX(-50%);
+  1246→  width: 3px;
+  1247→  height: 3px;
+  1248→  border-radius: 50%;
+  1249→  background: var(--muted2);
+  1250→}
+  1251→.plan-hab-day.today.done::after { background: rgba(255, 255, 255, 0.75); }
+  1252→.plan-hab-empty {
+  1253→  display: flex;
+  1254→  align-items: center;
+  1255→  justify-content: space-between;
+  1256→  gap: 10px;
+  1257→  flex-wrap: wrap;
+  1258→  margin-top: 10px;
+  1259→  padding-top: 10px;
+  1260→  border-top: 1px solid var(--hairline);
+  1261→  font-size: 12px;
+  1262→  color: var(--faint);
+  1263→}
+  1264→
+  1265→/* ---------- v3 responsive & a11y ---------- */
+  1266→@media (max-width: 640px) {
+  1267→  /* the add panel becomes a bottom sheet */
+  1268→  .plan-add {
+  1269→    left: 0 !important;
+  1270→    right: 0 !important;
+  1271→    top: auto !important;
+  1272→    bottom: 0 !important;
+  1273→    width: 100% !important;
+  1274→    max-width: 100% !important;
+  1275→    max-height: 80vh !important;
+  1276→    border-radius: 18px 18px 0 0;
+  1277→    border-bottom: none;
+  1278→    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  1279→    animation: planSheetIn 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  1280→  }
+  1281→  .plan-add-backdrop { background: rgba(6, 12, 9, 0.4); }
+  1282→  .plan-add-sum { align-self: stretch; justify-content: center; }
+  1283→  .plan-add-types { gap: 6px; }
+  1284→  .plan-hab-days { grid-template-columns: repeat(7, minmax(30px, 1fr)); }
+  1285→  .plan-hab-day { width: auto; }
+  1286→  .plan-src-row { flex-wrap: wrap; }
+  1287→  .plan-src-main { flex-basis: 100%; }
+  1288→}
+  1289→
+  1290→@media (pointer: coarse) {
+  1291→  .plan-add .seg button { min-height: 44px; }
+  1292→  .plan-add-time { height: 44px; }
+  1293→  .plan-add-step input { height: 44px; }
+  1294→  .plan-add-step button { width: 40px; height: 44px; }
+  1295→  .plan-add-row { min-height: 52px; }
+  1296→  .plan-add-type { min-height: 52px; }
+  1297→  .plan-hab-day { height: 38px; }
+  1298→}
+  1299→
+  1300→@media (prefers-reduced-motion: reduce) {
+  1301→  .plan-add,
+  1302→  .plan-add-backdrop { animation: none; }
+  1303→  .plan-add-type,
+  1304→  .plan-add-row,
+  1305→  .plan-add-step button,
+  1306→  .plan-hab-chip,
+  1307→  .plan-hab-day,
+  1308→  .plan-src-title { transition: none; }
+  1309→}
+  1310→

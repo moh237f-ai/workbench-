@@ -1,0 +1,1296 @@
+     1→/* ==================== Workbench Aurora — Zustand Store ==================== */
+     2→'use client';
+     3→
+     4→import { create } from 'zustand';
+     5→import { persist, createJSONStorage } from 'zustand/middleware';
+     6→import type {
+     7→  ActiveTimer, CalendarSystem, ClockType, Entry, FilePlanBlock, FocusTiming, GraphView, Habit,
+     8→  Item, ItemStatus, JournalEntry, Label, LibraryFolder, ReadingSession, ReaderPrefs, ReportRange,
+     9→  ResourceFile, Roadmap, RoadmapEdge, RoadmapNode, ThemeId, ViewId,
+    10→} from './types';
+    11→import { SWATCHES, FOCUS_PRESETS, FOLDER_SWATCHES } from './types';
+    12→import {
+    13→  entriesInRange, getFocusTiming, hhmm, isoDate, todayStr, uid,
+    14→} from './helpers';
+    15→
+    16→const STORAGE_KEY = 'workbench_aurora_v3';
+    17→const MAX_HIST = 80;
+    18→const MAX_READING_SESSIONS = 400;
+    19→
+    20→/* ---------- defaults ---------- */
+    21→
+    22→export function makeItem(partial: Partial<Item> = {}): Item {
+    23→  const now = new Date().toISOString();
+    24→  return {
+    25→    id: uid(),
+    26→    title: 'Untitled',
+    27→    type: 'task',
+    28→    parentId: null,
+    29→    deadline: null,
+    30→    notes: '',
+    31→    manualProgress: 0,
+    32→    checklist: [],
+    33→    color: null,
+    34→    priority: 'p2',
+    35→    status: 'todo',
+    36→    estimateMin: null,
+    37→    nextAction: '',
+    38→    dependsOn: [],
+    39→    fileIds: [],
+    40→    plannedStart: null,
+    41→    plannedEnd: null,
+    42→    startDate: null,
+    43→    completedAt: null,
+    44→    createdAt: now,
+    45→    updatedAt: now,
+    46→    ...partial,
+    47→  };
+    48→}
+    49→
+    50→export function makeFile(partial: Partial<ResourceFile> = {}): ResourceFile {
+    51→  return {
+    52→    id: uid(),
+    53→    title: 'Untitled PDF',
+    54→    fileName: 'file.pdf',
+    55→    size: 0,
+    56→    pageCount: 1,
+    57→    addedAt: new Date().toISOString(),
+    58→    deadline: null,
+    59→    coverMode: 'page',
+    60→    coverPage: 1,
+    61→    color: null,
+    62→    tags: [],
+    63→    notes: '',
+    64→    currentPage: 1,
+    65→    pageSeconds: {},
+    66→    readPages: [],
+    67→    favoritePages: [],
+    68→    annoPages: [],
+    69→    folderId: null,
+    70→    lastReadAt: null,
+    71→    archived: false,
+    72→    ...partial,
+    73→  };
+    74→}
+    75→
+    76→export const DEFAULT_READER_PREFS: ReaderPrefs = {
+    77→  viewMode: 'single',
+    78→  tool: 'select',
+    79→  themeMode: 'light',
+    80→  custom: { brightness: 100, contrast: 100, sepia: 0 },
+    81→  penColor: '#FB7185',
+    82→  penWidth: 3,
+    83→  hlColor: '#FDE68A',
+    84→  hlWidth: 18,
+    85→};
+    86→
+    87→export function makeRoadmap(partial: Partial<Roadmap> = {}): Roadmap {
+    88→  const now = new Date().toISOString();
+    89→  return {
+    90→    id: uid(),
+    91→    title: 'New roadmap',
+    92→    description: '',
+    93→    nodes: [],
+    94→    edges: [],
+    95→    createdAt: now,
+    96→    updatedAt: now,
+    97→    ...partial,
+    98→  };
+    99→}
+   100→
+   101→function makeEntry(partial: Partial<Entry> = {}): Entry {
+   102→  return {
+   103→    id: uid(),
+   104→    date: todayStr(),
+   105→    startTime: null,
+   106→    endTime: null,
+   107→    durationMin: 0,
+   108→    labelIds: [],
+   109→    itemIds: [],
+   110→    note: '',
+   111→    createdAt: new Date().toISOString(),
+   112→    ...partial,
+   113→  };
+   114→}
+   115→
+   116→export interface WBState {
+   117→  hydrated: boolean;
+   118→  /* data */
+   119→  items: Item[];
+   120→  labels: Label[];
+   121→  entries: Entry[];
+   122→  habits: Habit[];
+   123→  journal: JournalEntry[];
+   124→  activeTimer: ActiveTimer | null;
+   125→  expanded: Record<string, boolean>;
+   126→  /* v4 data */
+   127→  files: ResourceFile[];
+   128→  readingSessions: ReadingSession[];
+   129→  filePlans: FilePlanBlock[];
+   130→  roadmaps: Roadmap[];
+   131→  activeRoadmapId: string | null;
+   132→  libraryFolders: LibraryFolder[];
+   133→  libraryFolderFilter: string; // 'all' | 'unfiled' | folder id
+   134→  librarySearch: string;
+   135→  readerPrefs: ReaderPrefs;
+   136→  /* ui */
+   137→  theme: ThemeId;
+   138→  view: ViewId;
+   139→  graphView: GraphView;
+   140→  reportRange: ReportRange;
+   141→  calendarSystem: CalendarSystem;
+   142→  calMonthOffset: number;
+   143→  calendarSelectedDate: string;
+   144→  plannerMode: 'day' | 'week';
+   145→  plannerDate: string;
+   146→  libraryFilter: 'all' | 'reading' | 'unread' | 'deadline' | 'archived';
+   147→  focusOpen: boolean;
+   148→  focusClockType: ClockType;
+   149→  focusBackground: string;
+   150→  focusPreset: string;
+   151→  focusCustomWork: number;
+   152→  focusCustomBreak: number;
+   153→  focusCompact: boolean;
+   154→  dailyCapacityMin: number;
+   155→  stats: { focusSessions: number; focusMinutes: number; readingMinutes: number; pagesRead: number };
+   156→  lastSavedAt: string | null;
+   157→  /* history (session only) */
+   158→  undoStack: string[];
+   159→  redoStack: string[];
+   160→
+   161→  /* ---------- actions ---------- */
+   162→  setHydrated: (v: boolean) => void;
+   163→  setView: (v: ViewId) => void;
+   164→  setTheme: (t: ThemeId) => void;
+   165→  cycleTheme: () => void;
+   166→  setGraphView: (g: GraphView) => void;
+   167→  setReportRange: (r: ReportRange) => void;
+   168→  setCalendarSystem: (c: CalendarSystem) => void;
+   169→  calNavigate: (delta: number) => void;
+   170→  calToday: () => void;
+   171→  selectCalendarDay: (iso: string) => void;
+   172→  setDailyCapacity: (m: number) => void;
+   173→
+   174→  toggleExpanded: (id: string) => void;
+   175→
+   176→  addItem: (partial: Partial<Item>) => Item;
+   177→  updateItem: (id: string, patch: Partial<Item>, opts?: { snapshot?: boolean }) => void;
+   178→  setItemStatus: (id: string, status: ItemStatus) => void;
+   179→  moveItem: (id: string, status: ItemStatus) => void; // kanban DnD with undo snapshot
+   180→  deleteItemCascade: (id: string) => void;
+   181→
+   182→  addLabel: (name: string) => void;
+   183→  renameLabel: (id: string, name: string) => void;
+   184→  deleteLabel: (id: string) => void;
+   185→  toggleItemLabel: (itemId: string, labelId: string) => void;
+   186→
+   187→  addEntry: (partial: Partial<Entry>) => void;
+   188→  deleteEntry: (id: string) => void;
+   189→
+   190→  addHabit: (partial: Partial<Habit>) => void;
+   191→  updateHabit: (id: string, patch: Partial<Habit>) => void;
+   192→  deleteHabit: (id: string) => void;
+   193→  toggleHabitDay: (id: string, date: string) => void;
+   194→
+   195→  saveJournal: (date: string, content: string) => void;
+   196→
+   197→  /* ---------- v4: library files ---------- */
+   198→  addFile: (partial: Partial<ResourceFile>) => ResourceFile;
+   199→  updateFile: (id: string, patch: Partial<ResourceFile>) => void;
+   200→  deleteFile: (id: string) => void;
+   201→  setFilePosition: (id: string, page: number) => void;
+   202→  addFilePageSeconds: (id: string, page: number, seconds: number) => void;
+   203→  markFilePage: (id: string, page: number, read: boolean) => void;
+   204→  logReadingSession: (session: Omit<ReadingSession, 'id'>) => void;
+   205→  toggleItemFile: (itemId: string, fileId: string) => void;
+   206→
+   207→  /* ---------- v4: file plan blocks ---------- */
+   208→  addFilePlan: (fileId: string, date: string, startMin: number, minutes: number) => FilePlanBlock;
+   209→  updateFilePlan: (id: string, patch: Partial<FilePlanBlock>) => void;
+   210→  deleteFilePlan: (id: string) => void;
+   211→
+   212→  /* ---------- v4: roadmaps ---------- */
+   213→  createRoadmap: (title: string) => Roadmap;
+   214→  updateRoadmap: (id: string, patch: Partial<Pick<Roadmap, 'title' | 'description'>>) => void;
+   215→  deleteRoadmap: (id: string) => void;
+   216→  setActiveRoadmap: (id: string | null) => void;
+   217→  addRoadmapNode: (roadmapId: string, node: Omit<RoadmapNode, 'id'>) => RoadmapNode;
+   218→  updateRoadmapNode: (roadmapId: string, nodeId: string, patch: Partial<RoadmapNode>) => void;
+   219→  removeRoadmapNode: (roadmapId: string, nodeId: string) => void;
+   220→  addRoadmapEdge: (roadmapId: string, from: string, to: string, label?: string) => void;
+   221→  updateRoadmapEdge: (roadmapId: string, edgeId: string, patch: Partial<RoadmapEdge>) => void;
+   222→  removeRoadmapEdge: (roadmapId: string, edgeId: string) => void;
+   223→
+   224→  setPlannerMode: (m: 'day' | 'week') => void;
+   225→  setPlannerDate: (d: string) => void;
+   226→  navigatePlanner: (deltaDays: number) => void;
+   227→  setLibraryFilter: (f: 'all' | 'reading' | 'unread' | 'deadline' | 'archived') => void;
+   228→
+   229→  /* v5: library folders + search */
+   230→  addLibraryFolder: (name: string) => LibraryFolder;
+   231→  renameLibraryFolder: (id: string, name: string) => void;
+   232→  setLibraryFolderColor: (id: string, color: string) => void;
+   233→  deleteLibraryFolder: (id: string) => void;
+   234→  moveFileToFolder: (fileId: string, folderId: string | null) => void;
+   235→  setLibraryFolderFilter: (f: string) => void;
+   236→  setLibrarySearch: (q: string) => void;
+   237→
+   238→  /* v5: reader — favorites + annotation mirror + prefs */
+   239→  toggleFileFavoritePage: (fileId: string, page: number) => void;
+   240→  setFileAnnoPages: (fileId: string, pages: string[]) => void;
+   241→  updateReaderPrefs: (patch: Partial<ReaderPrefs>) => void;
+   242→
+   243→  /* v5: roadmap utilities */
+   244→  duplicateRoadmap: (id: string) => Roadmap | null;
+   245→
+   246→  startTimer: (labelIds: string[], note: string, itemIds?: string[]) => void;
+   247→  startItemFocus: (itemId: string) => boolean;
+   248→  startFileFocus: (fileId: string) => boolean;
+   249→  startPomodoro: (itemIds?: string[]) => void;
+   250→  pausePomodoro: () => void;
+   251→  resumePomodoro: () => void;
+   252→  advancePomodoro: () => void;
+   253→  stopTimer: () => void;
+   254→
+   255→  setFocusOpen: (v: boolean) => void;
+   256→  setFocusClockType: (c: ClockType) => void;
+   257→  setFocusBackground: (b: string) => void;
+   258→  setFocusPreset: (p: string) => void;
+   259→  setFocusCustom: (work: number, brk: number) => void;
+   260→  toggleFocusCompact: () => void;
+   261→
+   262→  snapshot: () => void;
+   263→  undo: () => boolean;
+   264→  redo: () => boolean;
+   265→
+   266→  importData: (raw: unknown) => string | null;
+   267→  exportData: () => string;
+   268→  getFocusTiming: () => FocusTiming;
+   269→}
+   270→
+   271→/* ---------- helpers used by store ---------- */
+   272→
+   273→function coreSnapshot(s: WBState): string {
+   274→  return JSON.stringify({
+   275→    items: s.items,
+   276→    labels: s.labels,
+   277→    entries: s.entries,
+   278→    habits: s.habits,
+   279→    journal: s.journal,
+   280→    activeTimer: s.activeTimer,
+   281→    files: s.files,
+   282→    readingSessions: s.readingSessions,
+   283→    filePlans: s.filePlans,
+   284→    roadmaps: s.roadmaps,
+   285→  });
+   286→}
+   287→
+   288→function deleteCascade(
+   289→  items: Item[],
+   290→  labels: Label[],
+   291→  expanded: Record<string, boolean>,
+   292→  id: string
+   293→): Item[] {
+   294→  const desc = (iid: string): string[] => {
+   295→    const out: string[] = [];
+   296→    items.filter((i) => i.parentId === iid).forEach((c) => {
+   297→      out.push(c.id);
+   298→      out.push(...desc(c.id));
+   299→    });
+   300→    return out;
+   301→  };
+   302→  const ids = [id, ...desc(id)];
+   303→  labels.forEach((l) => {
+   304→    l.itemIds = l.itemIds.filter((x) => !ids.includes(x));
+   305→  });
+   306→  ids.forEach((i) => delete expanded[i]);
+   307→  return items.filter((i) => !ids.includes(i.id));
+   308→}
+   309→
+   310→/* ==================== store ==================== */
+   311→
+   312→export const useWB = create<WBState>()(
+   313→  persist(
+   314→    (set, get) => ({
+   315→      hydrated: false,
+   316→      items: [],
+   317→      labels: [],
+   318→      entries: [],
+   319→      habits: [],
+   320→      journal: [],
+   321→      activeTimer: null,
+   322→      expanded: {},
+   323→      files: [],
+   324→      readingSessions: [],
+   325→      filePlans: [],
+   326→      roadmaps: [],
+   327→      activeRoadmapId: null,
+   328→      libraryFolders: [],
+   329→      libraryFolderFilter: 'all',
+   330→      librarySearch: '',
+   331→      readerPrefs: { ...DEFAULT_READER_PREFS },
+   332→
+   333→      theme: 'light',
+   334→      view: 'today',
+   335→      graphView: 'tree',
+   336→      reportRange: 'week',
+   337→      calendarSystem: 'gregorian',
+   338→      calMonthOffset: 0,
+   339→      calendarSelectedDate: todayStr(),
+   340→      plannerMode: 'day',
+   341→      plannerDate: todayStr(),
+   342→      libraryFilter: 'all',
+   343→      focusOpen: false,
+   344→      focusClockType: 'analog',
+   345→      focusBackground: 'aurora',
+   346→      focusPreset: '25',
+   347→      focusCustomWork: 45,
+   348→      focusCustomBreak: 10,
+   349→      focusCompact: false,
+   350→      dailyCapacityMin: 240,
+   351→      stats: { focusSessions: 0, focusMinutes: 0, readingMinutes: 0, pagesRead: 0 },
+   352→      lastSavedAt: null,
+   353→      undoStack: [],
+   354→      redoStack: [],
+   355→
+   356→      setHydrated: (v) => set({ hydrated: v }),
+   357→      setView: (v) => set({ view: v }),
+   358→      setTheme: (t) => set({ theme: t }),
+   359→      cycleTheme: () => {
+   360→        const order: ThemeId[] = ['light', 'dark', 'prism'];
+   361→        const cur = get().theme;
+   362→        set({ theme: order[(order.indexOf(cur) + 1) % order.length] });
+   363→      },
+   364→      setGraphView: (g) => set({ graphView: g }),
+   365→      setReportRange: (r) => set({ reportRange: r }),
+   366→      setCalendarSystem: (c) => set({ calendarSystem: c, calMonthOffset: 0 }),
+   367→      calNavigate: (delta) => set((s) => ({ calMonthOffset: s.calMonthOffset + delta })),
+   368→      calToday: () => set({ calMonthOffset: 0, calendarSelectedDate: todayStr() }),
+   369→      selectCalendarDay: (iso) => set({ calendarSelectedDate: iso }),
+   370→      setDailyCapacity: (m) => set({ dailyCapacityMin: m }),
+   371→
+   372→      toggleExpanded: (id) =>
+   373→        set((s) => ({ expanded: { ...s.expanded, [id]: !(s.expanded[id] !== false) } })),
+   374→
+   375→      addItem: (partial) => {
+   376→        const item = makeItem(partial);
+   377→        set((s) => ({ items: [...s.items, item] }));
+   378→        return item;
+   379→      },
+   380→      updateItem: (id, patch, opts) => {
+   381→        if (opts?.snapshot) get().snapshot();
+   382→        set((s) => ({
+   383→          items: s.items.map((i) =>
+   384→            i.id === id ? { ...i, ...patch, updatedAt: new Date().toISOString() } : i
+   385→          ),
+   386→        }));
+   387→      },
+   388→      setItemStatus: (id, status) => {
+   389→        set((s) => ({
+   390→          items: s.items.map((i) => {
+   391→            if (i.id !== id) return i;
+   392→            const completedAt =
+   393→              status === 'done' ? i.completedAt || new Date().toISOString() : null;
+   394→            return { ...i, status, completedAt, updatedAt: new Date().toISOString() };
+   395→          }),
+   396→        }));
+   397→      },
+   398→      moveItem: (id, status) => {
+   399→        get().snapshot();
+   400→        get().setItemStatus(id, status);
+   401→      },
+   402→      deleteItemCascade: (id) => {
+   403→        get().snapshot();
+   404→        set((s) => {
+   405→          const labels = s.labels.map((l) => ({ ...l, itemIds: [...l.itemIds] }));
+   406→          const expanded = { ...s.expanded };
+   407→          const items = deleteCascade(s.items, labels, expanded, id);
+   408→          return { items, labels, expanded };
+   409→        });
+   410→      },
+   411→
+   412→      addLabel: (name) =>
+   413→        set((s) => ({
+   414→          labels: [...s.labels, { id: uid(), name, color: SWATCHES[s.labels.length % SWATCHES.length], itemIds: [] }],
+   415→        })),
+   416→      renameLabel: (id, name) =>
+   417→        set((s) => ({ labels: s.labels.map((l) => (l.id === id ? { ...l, name } : l)) })),
+   418→      deleteLabel: (id) => {
+   419→        get().snapshot();
+   420→        set((s) => ({
+   421→          labels: s.labels.filter((l) => l.id !== id),
+   422→          entries: s.entries.map((e) => ({ ...e, labelIds: e.labelIds.filter((x) => x !== id) })),
+   423→        }));
+   424→      },
+   425→      toggleItemLabel: (itemId, labelId) =>
+   426→        set((s) => ({
+   427→          labels: s.labels.map((l) =>
+   428→            l.id === labelId
+   429→              ? {
+   430→                  ...l,
+   431→                  itemIds: l.itemIds.includes(itemId)
+   432→                    ? l.itemIds.filter((x) => x !== itemId)
+   433→                    : [...l.itemIds, itemId],
+   434→                }
+   435→              : l
+   436→          ),
+   437→        })),
+   438→
+   439→      addEntry: (partial) => set((s) => ({ entries: [...s.entries, makeEntry(partial)] })),
+   440→      deleteEntry: (id) => {
+   441→        get().snapshot();
+   442→        set((s) => ({ entries: s.entries.filter((e) => e.id !== id) }));
+   443→      },
+   444→
+   445→      addHabit: (partial) =>
+   446→        set((s) => ({
+   447→          habits: [
+   448→            ...s.habits,
+   449→            {
+   450→              id: uid(),
+   451→              name: 'New habit',
+   452→              description: '',
+   453→              color: SWATCHES[s.habits.length % SWATCHES.length],
+   454→              cadence: 'daily',
+   455→              log: {},
+   456→              createdAt: new Date().toISOString(),
+   457→              ...partial,
+   458→            },
+   459→          ],
+   460→        })),
+   461→      updateHabit: (id, patch) =>
+   462→        set((s) => ({ habits: s.habits.map((h) => (h.id === id ? { ...h, ...patch } : h)) })),
+   463→      deleteHabit: (id) => {
+   464→        get().snapshot();
+   465→        set((s) => ({ habits: s.habits.filter((h) => h.id !== id) }));
+   466→      },
+   467→      toggleHabitDay: (id, date) =>
+   468→        set((s) => ({
+   469→          habits: s.habits.map((h) => (h.id === id ? { ...h, log: { ...h.log, [date]: !h.log[date] } } : h)),
+   470→        })),
+   471→
+   472→      saveJournal: (date, content) =>
+   473→        set((s) => {
+   474→          const existing = s.journal.find((j) => j.date === date);
+   475→          if (existing) {
+   476→            return {
+   477→              journal: s.journal.map((j) =>
+   478→                j.date === date ? { ...j, content, updatedAt: new Date().toISOString() } : j
+   479→              ),
+   480→            };
+   481→          }
+   482→          return {
+   483→            journal: [
+   484→              ...s.journal,
+   485→              { id: uid(), date, content, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
+   486→            ],
+   487→          };
+   488→        }),
+   489→
+   490→      /* ---------- v4: library files ---------- */
+   491→      addFile: (partial) => {
+   492→        const file = makeFile(partial);
+   493→        set((s) => ({ files: [...s.files, file] }));
+   494→        return file;
+   495→      },
+   496→      updateFile: (id, patch) =>
+   497→        set((s) => ({
+   498→          files: s.files.map((f) => (f.id === id ? { ...f, ...patch } : f)),
+   499→        })),
+   500→      deleteFile: (id) => {
+   501→        get().snapshot();
+   502→        set((s) => ({
+   503→          files: s.files.filter((f) => f.id !== id),
+   504→          readingSessions: s.readingSessions.filter((r) => r.fileId !== id),
+   505→          filePlans: s.filePlans.filter((p) => p.fileId !== id),
+   506→          items: s.items.map((i) => ({ ...i, fileIds: (i.fileIds || []).filter((x) => x !== id) })),
+   507→          roadmaps: s.roadmaps.map((r) => ({
+   508→            ...r,
+   509→            nodes: r.nodes.filter((n) => !(n.kind === 'file' && n.refId === id)),
+   510→            edges: (() => {
+   511→              const removed = r.nodes.filter((n) => n.kind === 'file' && n.refId === id).map((n) => n.id);
+   512→              return r.edges.filter((e) => !removed.includes(e.from) && !removed.includes(e.to));
+   513→            })(),
+   514→          })),
+   515→        }));
+   516→      },
+   517→      setFilePosition: (id, page) =>
+   518→        set((s) => ({
+   519→          files: s.files.map((f) =>
+   520→            f.id === id
+   521→              ? { ...f, currentPage: Math.max(1, Math.min(f.pageCount, page)), lastReadAt: new Date().toISOString() }
+   522→              : f
+   523→          ),
+   524→        })),
+   525→      addFilePageSeconds: (id, page, seconds) =>
+   526→        set((s) => ({
+   527→          files: s.files.map((f) => {
+   528→            if (f.id !== id) return f;
+   529→            const key = String(page);
+   530→            const pageSeconds = { ...f.pageSeconds, [key]: (f.pageSeconds[key] || 0) + seconds };
+   531→            return { ...f, pageSeconds, lastReadAt: new Date().toISOString() };
+   532→          }),
+   533→        })),
+   534→      markFilePage: (id, page, read) =>
+   535→        set((s) => ({
+   536→          files: s.files.map((f) => {
+   537→            if (f.id !== id) return f;
+   538→            const key = String(page);
+   539→            const readPages = read
+   540→              ? Array.from(new Set([...f.readPages, key]))
+   541→              : f.readPages.filter((p) => p !== key);
+   542→            return { ...f, readPages };
+   543→          }),
+   544→        })),
+   545→      logReadingSession: (session) => {
+   546→        if (session.minutes < 1) return; // ignore <1s noise
+   547→        set((s) => ({
+   548→          readingSessions: [...s.readingSessions, { ...session, id: uid() }].slice(-MAX_READING_SESSIONS),
+   549→          stats: {
+   550→            ...s.stats,
+   551→            readingMinutes: s.stats.readingMinutes + session.minutes,
+   552→            pagesRead: s.stats.pagesRead + session.pagesRead,
+   553→          },
+   554→        }));
+   555→      },
+   556→      toggleItemFile: (itemId, fileId) =>
+   557→        set((s) => ({
+   558→          items: s.items.map((i) =>
+   559→            i.id === itemId
+   560→              ? {
+   561→                  ...i,
+   562→                  fileIds: (i.fileIds || []).includes(fileId)
+   563→                    ? (i.fileIds || []).filter((x) => x !== fileId)
+   564→                    : [...(i.fileIds || []), fileId],
+   565→                  updatedAt: new Date().toISOString(),
+   566→                }
+   567→              : i
+   568→          ),
+   569→        })),
+   570→
+   571→      /* ---------- v4: file plan blocks ---------- */
+   572→      addFilePlan: (fileId, date, startMin, minutes) => {
+   573→        const plan: FilePlanBlock = { id: uid(), fileId, date, startMin, minutes, done: false };
+   574→        set((s) => ({ filePlans: [...s.filePlans, plan] }));
+   575→        return plan;
+   576→      },
+   577→      updateFilePlan: (id, patch) =>
+   578→        set((s) => ({ filePlans: s.filePlans.map((p) => (p.id === id ? { ...p, ...patch } : p)) })),
+   579→      deleteFilePlan: (id) => {
+   580→        get().snapshot();
+   581→        set((s) => ({ filePlans: s.filePlans.filter((p) => p.id !== id) }));
+   582→      },
+   583→
+   584→      /* ---------- v4: roadmaps ---------- */
+   585→      createRoadmap: (title) => {
+   586→        const rm = makeRoadmap({ title });
+   587→        set((s) => ({ roadmaps: [...s.roadmaps, rm], activeRoadmapId: rm.id }));
+   588→        return rm;
+   589→      },
+   590→      updateRoadmap: (id, patch) =>
+   591→        set((s) => ({
+   592→          roadmaps: s.roadmaps.map((r) =>
+   593→            r.id === id ? { ...r, ...patch, updatedAt: new Date().toISOString() } : r
+   594→          ),
+   595→        })),
+   596→      deleteRoadmap: (id) => {
+   597→        get().snapshot();
+   598→        set((s) => ({
+   599→          roadmaps: s.roadmaps.filter((r) => r.id !== id),
+   600→          activeRoadmapId: s.activeRoadmapId === id ? null : s.activeRoadmapId,
+   601→        }));
+   602→      },
+   603→      duplicateRoadmap: (id) => {
+   604→        const src = get().roadmaps.find((r) => r.id === id);
+   605→        if (!src) return null;
+   606→        get().snapshot();
+   607→        const now = new Date().toISOString();
+   608→        const idMap = new Map<string, string>();
+   609→        src.nodes.forEach((n) => idMap.set(n.id, uid()));
+   610→        const copy: Roadmap = {
+   611→          id: uid(),
+   612→          title: `${src.title} (copy)`,
+   613→          description: src.description,
+   614→          nodes: src.nodes.map((n) => ({ ...n, id: idMap.get(n.id) || uid() })),
+   615→          edges: src.edges.map((e) => ({
+   616→            ...e,
+   617→            id: uid(),
+   618→            from: idMap.get(e.from) || e.from,
+   619→            to: idMap.get(e.to) || e.to,
+   620→          })),
+   621→          createdAt: now,
+   622→          updatedAt: now,
+   623→        };
+   624→        set((s) => ({ roadmaps: [...s.roadmaps, copy] }));
+   625→        return copy;
+   626→      },
+   627→      setActiveRoadmap: (id) => set({ activeRoadmapId: id }),
+   628→      addRoadmapNode: (roadmapId, node) => {
+   629→        const full: RoadmapNode = { ...node, id: uid() };
+   630→        set((s) => ({
+   631→          roadmaps: s.roadmaps.map((r) =>
+   632→            r.id === roadmapId ? { ...r, nodes: [...r.nodes, full], updatedAt: new Date().toISOString() } : r
+   633→          ),
+   634→        }));
+   635→        return full;
+   636→      },
+   637→      updateRoadmapNode: (roadmapId, nodeId, patch) =>
+   638→        set((s) => ({
+   639→          roadmaps: s.roadmaps.map((r) =>
+   640→            r.id === roadmapId
+   641→              ? {
+   642→                  ...r,
+   643→                  nodes: r.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)),
+   644→                  updatedAt: new Date().toISOString(),
+   645→                }
+   646→              : r
+   647→          ),
+   648→        })),
+   649→      removeRoadmapNode: (roadmapId, nodeId) =>
+   650→        set((s) => ({
+   651→          roadmaps: s.roadmaps.map((r) =>
+   652→            r.id === roadmapId
+   653→              ? {
+   654→                  ...r,
+   655→                  nodes: r.nodes.filter((n) => n.id !== nodeId),
+   656→                  edges: r.edges.filter((e) => e.from !== nodeId && e.to !== nodeId),
+   657→                  updatedAt: new Date().toISOString(),
+   658→                }
+   659→              : r
+   660→          ),
+   661→        })),
+   662→      addRoadmapEdge: (roadmapId, from, to, label = '') => {
+   663→        set((s) => {
+   664→          const rm = s.roadmaps.find((r) => r.id === roadmapId);
+   665→          if (!rm) return {};
+   666→          if (from === to) return {};
+   667→          if (rm.edges.some((e) => e.from === from && e.to === to)) return {};
+   668→          return {
+   669→            roadmaps: s.roadmaps.map((r) =>
+   670→              r.id === roadmapId
+   671→                ? { ...r, edges: [...r.edges, { id: uid(), from, to, label }], updatedAt: new Date().toISOString() }
+   672→                : r
+   673→            ),
+   674→          };
+   675→        });
+   676→      },
+   677→      updateRoadmapEdge: (roadmapId, edgeId, patch) =>
+   678→        set((s) => ({
+   679→          roadmaps: s.roadmaps.map((r) =>
+   680→            r.id === roadmapId
+   681→              ? { ...r, edges: r.edges.map((e) => (e.id === edgeId ? { ...e, ...patch } : e)), updatedAt: new Date().toISOString() }
+   682→              : r
+   683→          ),
+   684→        })),
+   685→      removeRoadmapEdge: (roadmapId, edgeId) =>
+   686→        set((s) => ({
+   687→          roadmaps: s.roadmaps.map((r) =>
+   688→            r.id === roadmapId
+   689→              ? { ...r, edges: r.edges.filter((e) => e.id !== edgeId), updatedAt: new Date().toISOString() }
+   690→              : r
+   691→          ),
+   692→        })),
+   693→
+   694→      setPlannerMode: (m) => set({ plannerMode: m }),
+   695→      setPlannerDate: (d) => set({ plannerDate: d }),
+   696→      navigatePlanner: (deltaDays) =>
+   697→        set((s) => {
+   698→          const d = new Date(s.plannerDate + 'T12:00:00');
+   699→          d.setDate(d.getDate() + deltaDays);
+   700→          return { plannerDate: isoDate(d) };
+   701→        }),
+   702→      setLibraryFilter: (f) => set({ libraryFilter: f }),
+   703→
+   704→      /* ---------- v5: library folders + search ---------- */
+   705→      setLibraryFolderFilter: (f) => set({ libraryFolderFilter: f }),
+   706→      setLibrarySearch: (q) => set({ librarySearch: q }),
+   707→      addLibraryFolder: (name) => {
+   708→        const folder: LibraryFolder = {
+   709→          id: uid(),
+   710→          name: name.trim() || 'New folder',
+   711→          color: FOLDER_SWATCHES[Math.floor(Math.random() * FOLDER_SWATCHES.length)],
+   712→          createdAt: new Date().toISOString(),
+   713→        };
+   714→        set((s) => ({ libraryFolders: [...s.libraryFolders, folder] }));
+   715→        return folder;
+   716→      },
+   717→      renameLibraryFolder: (id, name) =>
+   718→        set((s) => ({
+   719→          libraryFolders: s.libraryFolders.map((f) =>
+   720→            f.id === id ? { ...f, name: name.trim() || f.name } : f
+   721→          ),
+   722→        })),
+   723→      setLibraryFolderColor: (id, color) =>
+   724→        set((s) => ({
+   725→          libraryFolders: s.libraryFolders.map((f) => (f.id === id ? { ...f, color } : f)),
+   726→        })),
+   727→      deleteLibraryFolder: (id) => {
+   728→        set((s) => ({
+   729→          libraryFolders: s.libraryFolders.filter((f) => f.id !== id),
+   730→          files: s.files.map((f) => (f.folderId === id ? { ...f, folderId: null } : f)),
+   731→          libraryFolderFilter: s.libraryFolderFilter === id ? 'all' : s.libraryFolderFilter,
+   732→        }));
+   733→      },
+   734→      moveFileToFolder: (fileId, folderId) =>
+   735→        set((s) => ({
+   736→          files: s.files.map((f) => (f.id === fileId ? { ...f, folderId } : f)),
+   737→        })),
+   738→
+   739→      /* ---------- v5: reader — favorites, annotation mirror, prefs ---------- */
+   740→      toggleFileFavoritePage: (fileId, page) =>
+   741→        set((s) => ({
+   742→          files: s.files.map((f) => {
+   743→            if (f.id !== fileId) return f;
+   744→            const key = String(page);
+   745→            const favoritePages = (f.favoritePages || []).includes(key)
+   746→              ? (f.favoritePages || []).filter((p) => p !== key)
+   747→              : [...(f.favoritePages || []), key];
+   748→            return { ...f, favoritePages };
+   749→          }),
+   750→        })),
+   751→      setFileAnnoPages: (fileId, pages) =>
+   752→        set((s) => ({
+   753→          files: s.files.map((f) => (f.id === fileId ? { ...f, annoPages: pages } : f)),
+   754→        })),
+   755→      updateReaderPrefs: (patch) =>
+   756→        set((s) => ({ readerPrefs: { ...s.readerPrefs, ...patch } })),
+   757→
+   758→      startTimer: (labelIds, note, itemIds = []) => {
+   759→        get().snapshot();
+   760→        set({
+   761→          activeTimer: { startedAt: new Date().toISOString(), labelIds, itemIds, fileId: null, note, pomodoro: null },
+   762→        });
+   763→      },
+   764→      startItemFocus: (itemId) => {
+   765→        const s = get();
+   766→        const item = s.items.find((i) => i.id === itemId);
+   767→        if (!item) return false;
+   768→        const blocked = (item.dependsOn || [])
+   769→          .map((d) => s.items.find((x) => x.id === d))
+   770→          .some((d) => d && d.status !== 'done' && d.status !== 'archived');
+   771→        if (blocked) return false;
+   772→        if (s.activeTimer) return false;
+   773→        const labelIds = s.labels.filter((l) => l.itemIds.includes(itemId)).map((l) => l.id);
+   774→        const preset = FOCUS_PRESETS.find((p) => p.id === s.focusPreset) || FOCUS_PRESETS[0];
+   775→        const workMin = s.focusPreset === 'custom' ? s.focusCustomWork : preset.workMin;
+   776→        const breakMin = s.focusPreset === 'custom' ? s.focusCustomBreak : preset.breakMin;
+   777→        set({
+   778→          activeTimer: {
+   779→            startedAt: new Date().toISOString(),
+   780→            labelIds,
+   781→            itemIds: [itemId],
+   782→            fileId: null,
+   783→            note: item.title,
+   784→            pomodoro: { workMin, breakMin, phase: 'work', cycle: 0, pausedAt: null },
+   785→          },
+   786→        });
+   787→        if (['todo', 'inbox', 'waiting'].includes(item.status)) get().setItemStatus(itemId, 'in_progress');
+   788→        return true;
+   789→      },
+   790→      startFileFocus: (fileId) => {
+   791→        const s = get();
+   792→        if (s.activeTimer) return false;
+   793→        const file = s.files.find((f) => f.id === fileId);
+   794→        if (!file) return false;
+   795→        const preset = FOCUS_PRESETS.find((p) => p.id === s.focusPreset) || FOCUS_PRESETS[0];
+   796→        const workMin = s.focusPreset === 'custom' ? s.focusCustomWork : preset.workMin;
+   797→        const breakMin = s.focusPreset === 'custom' ? s.focusCustomBreak : preset.breakMin;
+   798→        set({
+   799→          activeTimer: {
+   800→            startedAt: new Date().toISOString(),
+   801→            labelIds: [],
+   802→            itemIds: [],
+   803→            fileId,
+   804→            note: `Reading · ${file.title}`,
+   805→            pomodoro: { workMin, breakMin, phase: 'work', cycle: 0, pausedAt: null },
+   806→          },
+   807→        });
+   808→        return true;
+   809→      },
+   810→      startPomodoro: (itemIds = []) => {
+   811→        const s = get();
+   812→        const preset = FOCUS_PRESETS.find((p) => p.id === s.focusPreset) || FOCUS_PRESETS[0];
+   813→        const workMin = s.focusPreset === 'custom' ? s.focusCustomWork : preset.workMin;
+   814→        const breakMin = s.focusPreset === 'custom' ? s.focusCustomBreak : preset.breakMin;
+   815→        set({
+   816→          activeTimer: {
+   817→            startedAt: new Date().toISOString(),
+   818→            labelIds: [],
+   819→            itemIds,
+   820→            fileId: null,
+   821→            note: '',
+   822→            pomodoro: { workMin, breakMin, phase: 'work', cycle: 0, pausedAt: null },
+   823→          },
+   824→        });
+   825→      },
+   826→      pausePomodoro: () =>
+   827→        set((s) => {
+   828→          if (!s.activeTimer?.pomodoro || s.activeTimer.pomodoro.pausedAt) return {};
+   829→          return {
+   830→            activeTimer: {
+   831→              ...s.activeTimer,
+   832→              pomodoro: { ...s.activeTimer.pomodoro, pausedAt: new Date().toISOString() },
+   833→            },
+   834→          };
+   835→        }),
+   836→      resumePomodoro: () =>
+   837→        set((s) => {
+   838→          const t = s.activeTimer;
+   839→          if (!t?.pomodoro?.pausedAt) return {};
+   840→          const pauseMs = Date.now() - new Date(t.pomodoro.pausedAt).getTime();
+   841→          return {
+   842→            activeTimer: {
+   843→              ...t,
+   844→              startedAt: new Date(new Date(t.startedAt).getTime() + pauseMs).toISOString(),
+   845→              pomodoro: { ...t.pomodoro, pausedAt: null },
+   846→            },
+   847→          };
+   848→        }),
+   849→      advancePomodoro: () => {
+   850→        const s = get();
+   851→        const t = s.activeTimer;
+   852→        if (!t?.pomodoro) return;
+   853→        const start = new Date(t.startedAt);
+   854→        const end = new Date();
+   855→        const durationMin = Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000));
+   856→        const wasWork = t.pomodoro.phase === 'work';
+   857→        const entry = makeEntry({
+   858→          date: isoDate(start),
+   859→          startTime: hhmm(start),
+   860→          endTime: hhmm(end),
+   861→          durationMin,
+   862→          labelIds: [...t.labelIds],
+   863→          itemIds: [...t.itemIds],
+   864→          note: `${t.note} (${wasWork ? 'focus' : 'break'} ${t.pomodoro.cycle})`.trim(),
+   865→        });
+   866→        set({
+   867→          entries: [...s.entries, entry],
+   868→          activeTimer: {
+   869→            ...t,
+   870→            startedAt: new Date().toISOString(),
+   871→            pomodoro: {
+   872→              ...t.pomodoro,
+   873→              phase: wasWork ? 'break' : 'work',
+   874→              cycle: wasWork ? t.pomodoro.cycle + 1 : t.pomodoro.cycle,
+   875→              pausedAt: null,
+   876→            },
+   877→          },
+   878→          stats: wasWork
+   879→            ? {
+   880→                ...s.stats,
+   881→                focusSessions: s.stats.focusSessions + 1,
+   882→                focusMinutes: s.stats.focusMinutes + durationMin,
+   883→              }
+   884→            : s.stats,
+   885→        });
+   886→      },
+   887→      stopTimer: () => {
+   888→        const s = get();
+   889→        const t = s.activeTimer;
+   890→        if (!t) return;
+   891→        const start = new Date(t.startedAt);
+   892→        const end = new Date();
+   893→        const durationMin = Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000));
+   894→        const entry = makeEntry({
+   895→          date: isoDate(start),
+   896→          startTime: hhmm(start),
+   897→          endTime: hhmm(end),
+   898→          durationMin,
+   899→          labelIds: [...t.labelIds],
+   900→          itemIds: [...t.itemIds],
+   901→          note: t.note,
+   902→        });
+   903→        set({ entries: [...s.entries, entry], activeTimer: null });
+   904→      },
+   905→
+   906→      setFocusOpen: (v) => set({ focusOpen: v }),
+   907→      setFocusClockType: (c) => set({ focusClockType: c }),
+   908→      setFocusBackground: (b) => set({ focusBackground: b }),
+   909→      setFocusPreset: (p) => set({ focusPreset: p }),
+   910→      setFocusCustom: (work, brk) => set({ focusCustomWork: work, focusCustomBreak: brk }),
+   911→      toggleFocusCompact: () => set((s) => ({ focusCompact: !s.focusCompact })),
+   912→
+   913→      snapshot: () =>
+   914→        set((s) => ({
+   915→          undoStack: [...s.undoStack.slice(-(MAX_HIST - 1)), coreSnapshot(s)],
+   916→          redoStack: [],
+   917→        })),
+   918→      undo: () => {
+   919→        const s = get();
+   920→        if (!s.undoStack.length) return false;
+   921→        const prev = JSON.parse(s.undoStack[s.undoStack.length - 1]);
+   922→        set({
+   923→          undoStack: s.undoStack.slice(0, -1),
+   924→          redoStack: [...s.redoStack, coreSnapshot(s)],
+   925→          items: prev.items ?? s.items,
+   926→          labels: prev.labels ?? s.labels,
+   927→          entries: prev.entries ?? s.entries,
+   928→          habits: prev.habits ?? s.habits,
+   929→          journal: prev.journal ?? s.journal,
+   930→          activeTimer: prev.activeTimer ?? null,
+   931→          files: prev.files ?? s.files,
+   932→          readingSessions: prev.readingSessions ?? s.readingSessions,
+   933→          filePlans: prev.filePlans ?? s.filePlans,
+   934→          roadmaps: prev.roadmaps ?? s.roadmaps,
+   935→        });
+   936→        return true;
+   937→      },
+   938→      redo: () => {
+   939→        const s = get();
+   940→        if (!s.redoStack.length) return false;
+   941→        const next = JSON.parse(s.redoStack[s.redoStack.length - 1]);
+   942→        set({
+   943→          redoStack: s.redoStack.slice(0, -1),
+   944→          undoStack: [...s.undoStack, coreSnapshot(s)],
+   945→          items: next.items ?? s.items,
+   946→          labels: next.labels ?? s.labels,
+   947→          entries: next.entries ?? s.entries,
+   948→          habits: next.habits ?? s.habits,
+   949→          journal: next.journal ?? s.journal,
+   950→          activeTimer: next.activeTimer ?? null,
+   951→          files: next.files ?? s.files,
+   952→          readingSessions: next.readingSessions ?? s.readingSessions,
+   953→          filePlans: next.filePlans ?? s.filePlans,
+   954→          roadmaps: next.roadmaps ?? s.roadmaps,
+   955→        });
+   956→        return true;
+   957→      },
+   958→
+   959→      importData: (raw) => {
+   960→        try {
+   961→          const data = raw as Record<string, unknown>;
+   962→          if (!data || !Array.isArray(data.items)) return 'Invalid backup: no items array';
+   963→          const items = (data.items as Partial<Item>[]).map((i) => makeItem(i));
+   964→          const labels = ((data.labels as Partial<Label>[]) || []).map((l) => ({
+   965→            id: uid(),
+   966→            name: 'Label',
+   967→            color: SWATCHES[0],
+   968→            itemIds: [] as string[],
+   969→            ...l,
+   970→          }));
+   971→          const entries = ((data.entries as Partial<Entry>[]) || []).map((e) => makeEntry(e));
+   972→          const habits = ((data.habits as Partial<Habit>[]) || []).map((h) => ({
+   973→            id: uid(),
+   974→            name: 'Habit',
+   975→            description: '',
+   976→            color: SWATCHES[0],
+   977→            cadence: 'daily' as const,
+   978→            log: {},
+   979→            createdAt: new Date().toISOString(),
+   980→            ...h,
+   981→          }));
+   982→          const journal = ((data.journal as Partial<JournalEntry>[]) || []).map((j) => ({
+   983→            id: uid(),
+   984→            date: todayStr(),
+   985→            content: '',
+   986→            createdAt: new Date().toISOString(),
+   987→            updatedAt: new Date().toISOString(),
+   988→            ...j,
+   989→          }));
+   990→          const files = ((data.files as Partial<ResourceFile>[]) || []).map((f) => makeFile(f));
+   991→          const readingSessions = ((data.readingSessions as Partial<ReadingSession>[]) || []).map((r) => ({
+   992→            id: uid(),
+   993→            fileId: '',
+   994→            date: todayStr(),
+   995→            startedAt: new Date().toISOString(),
+   996→            endedAt: new Date().toISOString(),
+   997→            minutes: 0,
+   998→            pagesVisited: 0,
+   999→            pagesRead: 0,
+  1000→            startPage: 1,
+  1001→            endPage: 1,
+  1002→            ...r,
+  1003→          }));
+  1004→          const filePlans = ((data.filePlans as Partial<FilePlanBlock>[]) || []).map((p) => ({
+  1005→            id: uid(),
+  1006→            fileId: '',
+  1007→            date: todayStr(),
+  1008→            startMin: 540,
+  1009→            minutes: 30,
+  1010→            done: false,
+  1011→            ...p,
+  1012→          }));
+  1013→          const roadmaps = ((data.roadmaps as Partial<Roadmap>[]) || []).map((r) => makeRoadmap(r));
+  1014→          get().snapshot();
+  1015→          set({ items, labels, entries, habits, journal, files, readingSessions, filePlans, roadmaps });
+  1016→          return null;
+  1017→        } catch (e) {
+  1018→          return e instanceof Error ? e.message : 'Import failed';
+  1019→        }
+  1020→      },
+  1021→      exportData: () => {
+  1022→        const s = get();
+  1023→        return JSON.stringify(
+  1024→          {
+  1025→            app: 'workbench-aurora',
+  1026→            schemaVersion: 4,
+  1027→            exportedAt: new Date().toISOString(),
+  1028→            items: s.items,
+  1029→            labels: s.labels,
+  1030→            entries: s.entries,
+  1031→            habits: s.habits,
+  1032→            journal: s.journal,
+  1033→            stats: s.stats,
+  1034→            files: s.files,
+  1035→            readingSessions: s.readingSessions,
+  1036→            filePlans: s.filePlans,
+  1037→            roadmaps: s.roadmaps,
+  1038→          },
+  1039→          null,
+  1040→          2
+  1041→        );
+  1042→      },
+  1043→      getFocusTiming: () => getFocusTiming(get().activeTimer, Date.now()),
+  1044→    }),
+  1045→    {
+  1046→      name: STORAGE_KEY,
+  1047→      storage: createJSONStorage(() => localStorage),
+  1048→      skipHydration: true,
+  1049→      version: 4,
+  1050→      migrate: (persisted: unknown) => {
+  1051→        const p = (persisted || {}) as Record<string, unknown>;
+  1052→        const items = Array.isArray(p.items)
+  1053→          ? (p.items as Partial<Item>[]).map((i) => makeItem(i))
+  1054→          : [];
+  1055→        const stats = (p.stats as WBState['stats']) || { focusSessions: 0, focusMinutes: 0, readingMinutes: 0, pagesRead: 0 };
+  1056→        if (typeof stats.readingMinutes !== 'number') stats.readingMinutes = 0;
+  1057→        if (typeof stats.pagesRead !== 'number') stats.pagesRead = 0;
+  1058→        const prefsRaw = (p.readerPrefs || {}) as Partial<ReaderPrefs>;
+  1059→        return {
+  1060→          ...p,
+  1061→          items,
+  1062→          files: Array.isArray(p.files) ? (p.files as Partial<ResourceFile>[]).map((f) => makeFile(f)) : [],
+  1063→          readingSessions: Array.isArray(p.readingSessions) ? p.readingSessions : [],
+  1064→          filePlans: Array.isArray(p.filePlans) ? p.filePlans : [],
+  1065→          roadmaps: Array.isArray(p.roadmaps) ? (p.roadmaps as Partial<Roadmap>[]).map((r) => makeRoadmap(r)) : [],
+  1066→          activeRoadmapId: (p.activeRoadmapId as string | null) ?? null,
+  1067→          plannerMode: (p.plannerMode as 'day' | 'week') ?? 'day',
+  1068→          plannerDate: (p.plannerDate as string) ?? todayStr(),
+  1069→          libraryFilter: (p.libraryFilter as WBState['libraryFilter']) ?? 'all',
+  1070→          libraryFolders: Array.isArray(p.libraryFolders)
+  1071→            ? (p.libraryFolders as Partial<LibraryFolder>[]).map((f) => ({
+  1072→                id: f.id || uid(),
+  1073→                name: f.name || 'Folder',
+  1074→                color: f.color || FOLDER_SWATCHES[0],
+  1075→                createdAt: f.createdAt || new Date().toISOString(),
+  1076→              }))
+  1077→            : [],
+  1078→          libraryFolderFilter: (p.libraryFolderFilter as string) || 'all',
+  1079→          librarySearch: (p.librarySearch as string) || '',
+  1080→          readerPrefs: {
+  1081→            ...DEFAULT_READER_PREFS,
+  1082→            ...prefsRaw,
+  1083→            custom: { ...DEFAULT_READER_PREFS.custom, ...(prefsRaw.custom || {}) },
+  1084→          },
+  1085→          stats,
+  1086→        };
+  1087→      },
+  1088→      partialize: (s) => ({
+  1089→        theme: s.theme,
+  1090→        view: s.view,
+  1091→        graphView: s.graphView,
+  1092→        reportRange: s.reportRange,
+  1093→        calendarSystem: s.calendarSystem,
+  1094→        calMonthOffset: s.calMonthOffset,
+  1095→        calendarSelectedDate: s.calendarSelectedDate,
+  1096→        plannerMode: s.plannerMode,
+  1097→        plannerDate: s.plannerDate,
+  1098→        libraryFilter: s.libraryFilter,
+  1099→        libraryFolders: s.libraryFolders,
+  1100→        libraryFolderFilter: s.libraryFolderFilter,
+  1101→        librarySearch: s.librarySearch,
+  1102→        readerPrefs: s.readerPrefs,
+  1103→        focusClockType: s.focusClockType,
+  1104→        focusBackground: s.focusBackground,
+  1105→        focusPreset: s.focusPreset,
+  1106→        focusCustomWork: s.focusCustomWork,
+  1107→        focusCustomBreak: s.focusCustomBreak,
+  1108→        focusCompact: s.focusCompact,
+  1109→        dailyCapacityMin: s.dailyCapacityMin,
+  1110→        stats: s.stats,
+  1111→        items: s.items,
+  1112→        labels: s.labels,
+  1113→        entries: s.entries,
+  1114→        habits: s.habits,
+  1115→        journal: s.journal,
+  1116→        activeTimer: s.activeTimer,
+  1117→        expanded: s.expanded,
+  1118→        files: s.files,
+  1119→        readingSessions: s.readingSessions,
+  1120→        filePlans: s.filePlans,
+  1121→        roadmaps: s.roadmaps,
+  1122→        activeRoadmapId: s.activeRoadmapId,
+  1123→      }),
+  1124→      onRehydrateStorage: () => (state) => {
+  1125→        state?.setHydrated(true);
+  1126→      },
+  1127→    }
+  1128→  )
+  1129→);
+  1130→
+  1131→/* ---------- standalone data selectors ---------- */
+  1132→
+  1133→export function wbChildren(items: Item[], id: string): Item[] {
+  1134→  return items.filter((i) => i.parentId === id);
+  1135→}
+  1136→export function wbItem(items: Item[], id: string): Item | undefined {
+  1137→  return items.find((i) => i.id === id);
+  1138→}
+  1139→export function wbRootItems(items: Item[]): Item[] {
+  1140→  return items.filter((i) => !i.parentId);
+  1141→}
+  1142→export function wbDescendantIds(items: Item[], id: string): string[] {
+  1143→  const out: string[] = [];
+  1144→  items.filter((i) => i.parentId === id).forEach((c) => {
+  1145→    out.push(c.id);
+  1146→    out.push(...wbDescendantIds(items, c.id));
+  1147→  });
+  1148→  return out;
+  1149→}
+  1150→export function wbIsBlocked(items: Item[], item: Item | undefined): boolean {
+  1151→  if (!item) return false;
+  1152→  return (item.dependsOn || []).some((depId) => {
+  1153→    const d = wbItem(items, depId);
+  1154→    return !!d && d.status !== 'done' && d.status !== 'archived';
+  1155→  });
+  1156→}
+  1157→export function wbBlockedCount(items: Item[], item: Item): number {
+  1158→  return (item.dependsOn || []).filter((depId) => {
+  1159→    const d = wbItem(items, depId);
+  1160→    return !!d && d.status !== 'done' && d.status !== 'archived';
+  1161→  }).length;
+  1162→}
+  1163→export function wbCanDependOn(items: Item[], itemId: string, candidateId: string): boolean {
+  1164→  if (!candidateId || candidateId === itemId) return false;
+  1165→  if (wbDescendantIds(items, itemId).includes(candidateId)) return false;
+  1166→  if (!wbItem(items, candidateId)) return false;
+  1167→  // no cycles: candidate must not (transitively) depend on itemId
+  1168→  const reaches = (startId: string, targetId: string, seen = new Set<string>()): boolean => {
+  1169→    if (startId === targetId) return true;
+  1170→    if (seen.has(startId)) return false;
+  1171→    seen.add(startId);
+  1172→    const it = wbItem(items, startId);
+  1173→    return !!it && (it.dependsOn || []).some((d) => reaches(d, targetId, seen));
+  1174→  };
+  1175→  return !reaches(candidateId, itemId);
+  1176→}
+  1177→export function wbReadyItems(items: Item[]): Item[] {
+  1178→  return items.filter(
+  1179→    (i) => !['done', 'archived', 'inbox'].includes(i.status) && !wbIsBlocked(items, i)
+  1180→  );
+  1181→}
+  1182→export function wbPlannedItems(items: Item[], date: string): Item[] {
+  1183→  return items.filter((i) => i.type === 'task' && i.startDate === date && i.status !== 'done' && i.status !== 'archived');
+  1184→}
+  1185→export function wbPlannedMinutes(items: Item[], date: string): number {
+  1186→  return wbPlannedItems(items, date).reduce((s, i) => s + (Number(i.estimateMin) || 30), 0);
+  1187→}
+  1188→export function wbTimeboxedItems(items: Item[], date: string): Item[] {
+  1189→  return items
+  1190→    .filter((i) => i.plannedStart && i.plannedStart.slice(0, 10) === date && i.status !== 'archived')
+  1191→    .sort((a, b) => (a.plannedStart || '').localeCompare(b.plannedStart || ''));
+  1192→}
+  1193→export function wbPriorityWeight(p: string): number {
+  1194→  return ({ p0: 0, p1: 1, p2: 2, p3: 3 } as Record<string, number>)[p] ?? 2;
+  1195→}
+  1196→export function wbPickNextAction(items: Item[]): Item | null {
+  1197→  const today = todayStr();
+  1198→  const pool = wbPlannedItems(items, today).filter((i) => !wbIsBlocked(items, i));
+  1199→  const source = pool.length ? pool : wbReadyItems(items).filter((i) => i.type === 'task');
+  1200→  return (
+  1201→    source
+  1202→      .filter((i) => i.type !== 'goal' || wbChildren(items, i.id).length === 0)
+  1203→      .sort((a, b) => {
+  1204→        const p = wbPriorityWeight(a.priority) - wbPriorityWeight(b.priority);
+  1205→        if (p) return p;
+  1206→        const ad = a.deadline ? new Date(a.deadline).getTime() : Infinity;
+  1207→        const bd = b.deadline ? new Date(b.deadline).getTime() : Infinity;
+  1208→        if (ad !== bd) return ad - bd;
+  1209→        return (b.updatedAt || '').localeCompare(a.updatedAt || '');
+  1210→      })[0] || null
+  1211→  );
+  1212→}
+  1213→export function wbInsights(items: Item[], entries: Entry[], capacity: number): string[] {
+  1214→  const today = todayStr();
+  1215→  const a: string[] = [];
+  1216→  const overdue = items.filter(
+  1217→    (i) => i.deadline && i.status !== 'done' && i.status !== 'archived' && i.deadline < today
+  1218→  ).length;
+  1219→  const blocked = items.filter((i) => wbIsBlocked(items, i)).length;
+  1220→  const planned = wbPlannedMinutes(items, today);
+  1221→  const logged = entriesInRange(entries, today, today).reduce((s, e) => s + e.durationMin, 0);
+  1222→  if (overdue) a.push(`${overdue} item${overdue === 1 ? ' is' : 's are'} overdue — pull the most important one into your next focus block.`);
+  1223→  if (blocked) a.push(`${blocked} item${blocked === 1 ? ' is' : 's are'} blocked by dependencies. Resolve them before adding more work.`);
+  1224→  if (planned > capacity) a.push(`Today is over capacity by ${planned - capacity} minutes. Trim the plan before starting another block.`);
+  1225→  if (logged >= 240) a.push(`${Math.round(logged / 60)}h logged today — protect your recovery time.`);
+  1226→  if (!a.length) a.push('The system is stable. Protect your next action and keep capacity realistic.');
+  1227→  return a;
+  1228→}
+  1229→
+  1230→/* ---------- v4: file selectors ---------- */
+  1231→
+  1232→export const PAGE_READ_THRESHOLD_SEC = 15;
+  1233→
+  1234→export function wbFileReadPages(file: ResourceFile): number {
+  1235→  let count = 0;
+  1236→  for (let p = 1; p <= file.pageCount; p++) {
+  1237→    const key = String(p);
+  1238→    if (file.readPages.includes(key) || (file.pageSeconds[key] || 0) >= PAGE_READ_THRESHOLD_SEC) count++;
+  1239→  }
+  1240→  return count;
+  1241→}
+  1242→
+  1243→export function wbFileProgress(file: ResourceFile): number {
+  1244→  if (!file.pageCount) return 0;
+  1245→  return Math.round((wbFileReadPages(file) / file.pageCount) * 100);
+  1246→}
+  1247→
+  1248→export function wbFileSeconds(file: ResourceFile): number {
+  1249→  return Object.values(file.pageSeconds || {}).reduce((s, v) => s + v, 0);
+  1250→}
+  1251→
+  1252→export function wbFileMinutes(file: ResourceFile): number {
+  1253→  return Math.round(wbFileSeconds(file) / 60);
+  1254→}
+  1255→
+  1256→export function wbFileAvgSecPerPage(file: ResourceFile): number {
+  1257→  const visited = Object.values(file.pageSeconds || {}).filter((v) => v > 0).length;
+  1258→  return visited ? Math.round(wbFileSeconds(file) / visited) : 0;
+  1259→}
+  1260→
+  1261→export type FileDeadlineStatus = 'over' | 'soon' | 'ok' | null;
+  1262→
+  1263→export function wbFileDeadlineStatus(file: ResourceFile): FileDeadlineStatus {
+  1264→  if (!file.deadline) return null;
+  1265→  const pct = wbFileProgress(file);
+  1266→  if (pct >= 100) return 'ok';
+  1267→  const du = Math.round(
+  1268→    (new Date(file.deadline + 'T12:00:00').getTime() - new Date(todayStr() + 'T12:00:00').getTime()) / 86400000
+  1269→  );
+  1270→  if (du < 0) return 'over';
+  1271→  if (du <= 3) return 'soon';
+  1272→  return 'ok';
+  1273→}
+  1274→
+  1275→export function wbItemsForFile(items: Item[], fileId: string): Item[] {
+  1276→  return items.filter((i) => (i.fileIds || []).includes(fileId));
+  1277→}
+  1278→
+  1279→export function wbFilePlansForDate(filePlans: FilePlanBlock[], date: string): FilePlanBlock[] {
+  1280→  return filePlans
+  1281→    .filter((p) => p.date === date)
+  1282→    .sort((a, b) => a.startMin - b.startMin);
+  1283→}
+  1284→
+  1285→export function wbReadingMinutesInRange(readingSessions: ReadingSession[], from: string, to: string): number {
+  1286→  return readingSessions
+  1287→    .filter((r) => r.date >= from && r.date <= to)
+  1288→    .reduce((s, r) => s + r.minutes, 0);
+  1289→}
+  1290→
+  1291→export function wbReadingPagesInRange(readingSessions: ReadingSession[], from: string, to: string): number {
+  1292→  return readingSessions
+  1293→    .filter((r) => r.date >= from && r.date <= to)
+  1294→    .reduce((s, r) => s + r.pagesRead, 0);
+  1295→}
+  1296→

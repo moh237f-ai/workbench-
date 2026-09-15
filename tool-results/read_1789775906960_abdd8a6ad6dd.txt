@@ -1,0 +1,702 @@
+     1→   500→   500→  const addFolder = useWB((s) => s.addLibraryFolder);
+     2→   501→   501→  const renameFolder = useWB((s) => s.renameLibraryFolder);
+     3→   502→   502→  const setFolderColor = useWB((s) => s.setLibraryFolderColor);
+     4→   503→   503→  const setFolderIcon = useWB((s) => s.setLibraryFolderIcon);
+     5→   504→   504→  const deleteFolder = useWB((s) => s.deleteLibraryFolder);
+     6→   505→   505→  const moveFolder = useWB((s) => s.moveLibraryFolder);
+     7→   506→   506→  const moveFile = useWB((s) => s.moveFileToFolder);
+     8→   507→   507→  const confirm = useConfirm();
+     9→   508→   508→
+    10→   509→   509→  const [treeOpen, setTreeOpen] = useState(true);
+    11→   510→   510→  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+    12→   511→   511→  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => new Set());
+    13→   512→   512→  const [renameId, setRenameId] = useState<string | null>(null);
+    14→   513→   513→  const [renameText, setRenameText] = useState('');
+    15→   514→   514→  const [createParent, setCreateParent] = useState<string | null>(null); // 'root' | folder id | null
+    16→   515→   515→  const [createText, setCreateText] = useState('');
+    17→   516→   516→  const [dropId, setDropId] = useState<string | null>(null);
+    18→   517→   517→  const [iconPop, setIconPop] = useState<{ id: string; top: number; left: number } | null>(null);
+    19→   518→   518→
+    20→   519→   519→  const tree = useMemo(() => buildFolderTree(folders), [folders]);
+    21→   520→   520→  const descendants = useMemo(() => selfAndDescendants(folders), [folders]);
+    22→   521→   521→
+    23→   522→   522→  /* per-folder file counts INCLUDING subfolders (tooltip says so) */
+    24→   523→   523→  const counts = useMemo(() => {
+    25→   524→   524→    const map = new Map<string, number>();
+    26→   525→   525→    const direct = new Map<string, number>();
+    27→   526→   526→    const known = new Set(folders.map((f) => f.id));
+    28→   527→   527→    for (const f of files) {
+    29→   528→   528→      if (f.folderId && known.has(f.folderId)) direct.set(f.folderId, (direct.get(f.folderId) ?? 0) + 1);
+    30→   529→   529→    }
+    31→   530→   530→    for (const folder of folders) {
+    32→   531→   531→      let n = 0;
+    33→   532→   532→      for (const id of descendants.get(folder.id) ?? [folder.id]) n += direct.get(id) ?? 0;
+    34→   533→   533→      map.set(folder.id, n);
+    35→   534→   534→    }
+    36→   535→   535→    return map;
+    37→   536→   536→  }, [files, folders, descendants]);
+    38→   537→   537→
+    39→   538→   538→  const unfiledCount = files.filter((f) => !f.folderId).length;
+    40→   539→   539→
+    41→   540→   540→  /* ancestors of the filtered folder are always visible (auto-expand, user can still collapse) */
+    42→   541→   541→  const filterPath = useMemo(
+    43→   542→   542→    () => (folderFilter === 'all' || folderFilter === 'unfiled' ? [] : folderPathOf(folders, folderFilter)),
+    44→   543→   543→    [folders, folderFilter]
+    45→   544→   544→  );
+    46→   545→   545→  const autoExpandIds = useMemo(() => {
+    47→   546→   546→    const s = new Set<string>();
+    48→   547→   547→    if (filterPath.length > 1) for (const f of filterPath.slice(0, -1)) s.add(f.id);
+    49→   548→   548→    return s;
+    50→   549→   549→  }, [filterPath]);
+    51→   550→   550→
+    52→   551→   551→  const isExpanded = (id: string): boolean =>
+    53→   552→   552→    (expanded.has(id) || autoExpandIds.has(id)) && !collapsedIds.has(id);
+    54→   553→   553→
+    55→   554→   554→  const forceExpand = (id: string) => {
+    56→   555→   555→    setExpanded((prev) => new Set([...prev, id]));
+    57→   556→   556→    setCollapsedIds((prev) => {
+    58→   557→   557→      if (!prev.has(id)) return prev;
+    59→   558→   558→      const n = new Set(prev);
+    60→   559→   559→      n.delete(id);
+    61→   560→   560→      return n;
+    62→   561→   561→    });
+    63→   562→   562→  };
+    64→   563→   563→
+    65→   564→   564→  const toggleExpand = (id: string) => {
+    66→   565→   565→    const willOpen = !isExpanded(id);
+    67→   566→   566→    setExpanded((prev) => {
+    68→   567→   567→      if (willOpen === prev.has(id)) return prev;
+    69→   568→   568→      const n = new Set(prev);
+    70→   569→   569→      if (willOpen) n.add(id);
+    71→   570→   570→      else n.delete(id);
+    72→   571→   571→      return n;
+    73→   572→   572→    });
+    74→   573→   573→    setCollapsedIds((prev) => {
+    75→   574→   574→      if (!willOpen === prev.has(id)) return prev;
+    76→   575→   575→      const n = new Set(prev);
+    77→   576→   576→      if (willOpen) n.delete(id);
+    78→   577→   577→      else n.add(id);
+    79→   578→   578→      return n;
+    80→   579→   579→    });
+    81→   580→   580→  };
+    82→   581→   581→
+    83→   582→   582→  /* icon picker popover: fixed + viewport-clamped at open time, closes on outside click / Esc */
+    84→   583→   583→  useEffect(() => {
+    85→   584→   584→    if (!iconPop) return;
+    86→   585→   585→    const onDown = (e: MouseEvent) => {
+    87→   586→   586→      const t = e.target as HTMLElement;
+    88→   587→   587→      if (t.closest('.lib-icon-pop') || t.closest('[data-ico-btn]')) return;
+    89→   588→   588→      setIconPop(null);
+    90→   589→   589→    };
+    91→   590→   590→    const onKey = (e: KeyboardEvent) => {
+    92→   591→   591→      if (e.key === 'Escape') {
+    93→   592→   592→        e.stopPropagation();
+    94→   593→   593→        setIconPop(null);
+    95→   594→   594→      }
+    96→   595→   595→    };
+    97→   596→   596→    document.addEventListener('mousedown', onDown);
+    98→   597→   597→    document.addEventListener('keydown', onKey, true);
+    99→   598→   598→    return () => {
+   100→   599→   599→      document.removeEventListener('mousedown', onDown);
+   101→   600→   600→      document.removeEventListener('keydown', onKey, true);
+   102→   601→   601→    };
+   103→   602→   602→  }, [iconPop]);
+   104→   603→   603→
+   105→   604→   604→  const openIconPop = (e: React.MouseEvent, folder: LibraryFolder) => {
+   106→   605→   605→    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+   107→   606→   606→    const W = 200;
+   108→   607→   607→    const H = 158;
+   109→   608→   608→    let left = rect.left;
+   110→   609→   609→    if (left + W > window.innerWidth - 8) left = Math.max(8, window.innerWidth - W - 8);
+   111→   610→   610→    let top = rect.bottom + 4;
+   112→   611→   611→    if (top + H > window.innerHeight - 8) top = Math.max(8, rect.top - H - 4);
+   113→   612→   612→    setIconPop((cur) => (cur?.id === folder.id ? null : { id: folder.id, top, left }));
+   114→   613→   613→  };
+   115→   614→   614→
+   116→   615→   615→  const startRename = (folder: LibraryFolder) => {
+   117→   616→   616→    setIconPop(null);
+   118→   617→   617→    setCreateParent(null);
+   119→   618→   618→    setRenameId(folder.id);
+   120→   619→   619→    setRenameText(folder.name);
+   121→   620→   620→  };
+   122→   621→   621→
+   123→   622→   622→  const commitRename = () => {
+   124→   623→   623→    if (!renameId) return;
+   125→   624→   624→    const name = renameText.trim();
+   126→   625→   625→    if (name) renameFolder(renameId, name);
+   127→   626→   626→    setRenameId(null);
+   128→   627→   627→  };
+   129→   628→   628→
+   130→   629→   629→  const cycleColor = (folder: LibraryFolder) => {
+   131→   630→   630→    const i = FOLDER_SWATCHES.indexOf(folder.color);
+   132→   631→   631→    setFolderColor(folder.id, FOLDER_SWATCHES[(i + 1) % FOLDER_SWATCHES.length]);
+   133→   632→   632→  };
+   134→   633→   633→
+   135→   634→   634→  const removeFolder = (folder: LibraryFolder) => {
+   136→   635→   635→    if (!confirm(`Delete folder "${folder.name}"? Subfolders flatten and files stay in the library.`)) return;
+   137→   636→   636→    deleteFolder(folder.id);
+   138→   637→   637→    toast('Folder deleted', folder.name);
+   139→   638→   638→  };
+   140→   639→   639→
+   141→   640→   640→  const finishCreate = (byKeyboard: boolean) => {
+   142→   641→   641→    const name = createText.trim();
+   143→   642→   642→    if (!name) {
+   144→   643→   643→      if (byKeyboard) toast('Folder name required', 'Give the folder a short name.');
+   145→   644→   644→      else {
+   146→   645→   645→        setCreateParent(null);
+   147→   646→   646→        setCreateText('');
+   148→   647→   647→      }
+   149→   648→   648→      return;
+   150→   649→   649→    }
+   151→   650→   650→    const parent = createParent === 'root' ? null : createParent;
+   152→   651→   651→    const folder = addFolder(name, parent);
+   153→   652→   652→    setCreateText('');
+   154→   653→   653→    setCreateParent(null);
+   155→   654→   654→    if (parent) forceExpand(parent);
+   156→   655→   655→    setFolderFilter(folder.id);
+   157→   656→   656→    toast(parent ? 'Subfolder created' : 'Folder created', name);
+   158→   657→   657→  };
+   159→   658→   658→
+   160→   659→   659→  /* drag & drop: file cards carry text/plain = file id; folder rows carry their folder id */
+   161→   660→   660→  const onRowDragOver = (e: React.DragEvent, id: string) => {
+   162→   661→   661→    const types = Array.from(e.dataTransfer.types);
+   163→   662→   662→    if (!types.includes('text/plain')) return;
+   164→   663→   663→    /* folder drags carry the custom type — folders can't be dropped on "Unfiled" (don't tease it) */
+   165→   664→   664→    if (id === 'unfiled' && types.includes('application/x-wb-folder')) return;
+   166→   665→   665→    e.preventDefault();
+   167→   666→   666→    e.dataTransfer.dropEffect = 'move';
+   168→   667→   667→    setDropId(id);
+   169→   668→   668→  };
+   170→   669→   669→  const onRowDragLeave = (id: string) => setDropId((cur) => (cur === id ? null : cur));
+   171→   670→   670→
+   172→   671→   671→  const onRowDragStart = (e: React.DragEvent, folder: LibraryFolder) => {
+   173→   672→   672→    if (renameId === folder.id) {
+   174→   673→   673→      e.preventDefault();
+   175→   674→   674→      return;
+   176→   675→   675→    }
+   177→   676→   676→    const t = e.target as HTMLElement;
+   178→   677→   677→    if (t.closest('button, input, select, textarea')) {
+   179→   678→   678→      e.preventDefault();
+   180→   679→   679→      return;
+   181→   680→   680→    }
+   182→   681→   681→    e.dataTransfer.setData('text/plain', folder.id);
+   183→   682→   682→    try {
+   184→   683→   683→      e.dataTransfer.setData('application/x-wb-folder', folder.id);
+   185→   684→   684→    } catch {
+   186→   685→   685→      /* some engines reject custom types — the text/plain payload covers it */
+   187→   686→   686→    }
+   188→   687→   687→    e.dataTransfer.effectAllowed = 'move';
+   189→   688→   688→  };
+   190→   689→   689→
+   191→   690→   690→  const handleDrop = (e: React.DragEvent, rowId: string) => {
+   192→   691→   691→    if (!Array.from(e.dataTransfer.types).includes('text/plain')) return;
+   193→   692→   692→    e.preventDefault();
+   194→   693→   693→    e.stopPropagation();
+   195→   694→   694→    setDropId(null);
+   196→   695→   695→    const fid = e.dataTransfer.getData('text/plain');
+   197→   696→   696→    if (!fid) return;
+   198→   697→   697→    const isFile = files.some((f) => f.id === fid);
+   199→   698→   698→    const isFolder = !isFile && folders.some((f) => f.id === fid);
+   200→   699→   699→    if (isFile) {
+   201→   700→   700→      const file = files.find((f) => f.id === fid);
+   202→   701→   701→      if (!file) return;
+   203→   702→   702→      const folderId = rowId === 'all' || rowId === 'unfiled' ? null : rowId;
+   204→   703→   703→      if ((file.folderId ?? null) === folderId) return;
+   205→   704→   704→      moveFile(fid, folderId);
+   206→   705→   705→      const folder = folderId ? folders.find((x) => x.id === folderId) : undefined;
+   207→   706→   706→      toast(folder ? 'Moved to folder' : 'Removed from folder', folder ? folder.name : file.title);
+   208→   707→   707→      return;
+   209→   708→   708→    }
+   210→   709→   709→    if (isFolder) {
+   211→   710→   710→      if (rowId === 'unfiled') return; // folders can't be unfiled
+   212→   711→   711→      if (rowId !== 'all' && (descendants.get(fid)?.has(rowId) ?? false)) return; // own descendant → silent
+   213→   712→   712→      const targetId = rowId === 'all' ? null : rowId;
+   214→   713→   713→      if ((folders.find((x) => x.id === fid)?.parentId ?? null) === targetId) return; // same parent → no-op
+   215→   714→   714→      const from = folders.find((x) => x.id === fid)?.name ?? 'Folder';
+   216→   715→   715→      moveFolder(fid, targetId);
+   217→   716→   716→      if (targetId) {
+   218→   717→   717→        forceExpand(targetId);
+   219→   718→   718→        toast('Folder moved', `${from} → ${folders.find((x) => x.id === targetId)?.name ?? ''}`);
+   220→   719→   719→      } else {
+   221→   720→   720→        toast('Folder moved to root', from);
+   222→   721→   721→      }
+   223→   722→   722→    }
+   224→   723→   723→  };
+   225→   724→   724→
+   226→   725→   725→  const rowKey = (e: React.KeyboardEvent, fn: () => void) => {
+   227→   726→   726→    /* inner controls (caret / dot / actions) handle their own keys */
+   228→   727→   727→    if ((e.target as HTMLElement).closest('button, input')) return;
+   229→   728→   728→    if (e.key === 'Enter' || e.key === ' ') {
+   230→   729→   729→      e.preventDefault();
+   231→   730→   730→      fn();
+   232→   731→   731→    }
+   233→   732→   732→  };
+   234→   733→   733→
+   235→   734→   734→  const renderRow = (node: FolderNode): React.ReactNode => {
+   236→   735→   735→    const { folder, children, depth } = node;
+   237→   736→   736→    const hasKids = children.length > 0;
+   238→   737→   737→    const isOpen = isExpanded(folder.id);
+   239→   738→   738→    const Icon = folderIconOf(folder.icon);
+   240→   739→   739→    const n = counts.get(folder.id) ?? 0;
+   241→   740→   740→    return (
+   242→   741→   741→      <React.Fragment key={folder.id}>
+   243→   742→   742→        <div
+   244→   743→   743→          role="treeitem"
+   245→   744→   744→          aria-selected={folderFilter === folder.id}
+   246→   745→   745→          aria-level={depth + 1}
+   247→   746→   746→          aria-expanded={hasKids ? isOpen : undefined}
+   248→   747→   747→          tabIndex={0}
+   249→   748→   748→          className={`lib-tree-row ${folderFilter === folder.id ? 'active' : ''} ${
+   250→   749→   749→            dropId === folder.id ? 'drop' : ''
+   251→   750→   750→          } ${renameId === folder.id ? 'renaming' : ''}`}
+   252→   751→   751→          style={{ ['--lib-d' as string]: depth }}
+   253→   752→   752→          title={`${n} ${n === 1 ? 'file' : 'files'} (incl. subfolders) · double-click to rename`}
+   254→   753→   753→          onClick={() => {
+   255→   754→   754→            if (renameId !== folder.id) setFolderFilter(folder.id);
+   256→   755→   755→          }}
+   257→   756→   756→          onKeyDown={(e) => {
+   258→   757→   757→            if (renameId === folder.id) return;
+   259→   758→   758→            rowKey(e, () => setFolderFilter(folder.id));
+   260→   759→   759→          }}
+   261→   760→   760→          onDoubleClick={() => startRename(folder)}
+   262→   761→   761→          draggable={renameId !== folder.id}
+   263→   762→   762→          onDragStart={(e) => onRowDragStart(e, folder)}
+   264→   763→   763→          onDragOver={(e) => onRowDragOver(e, folder.id)}
+   265→   764→   764→          onDragLeave={() => onRowDragLeave(folder.id)}
+   266→   765→   765→          onDrop={(e) => handleDrop(e, folder.id)}
+   267→   766→   766→        >
+   268→   767→   767→          {hasKids ? (
+   269→   768→   768→            <button
+   270→   769→   769→              type="button"
+   271→   770→   770→              className={`lib-tree-caret ${isOpen ? 'open' : ''}`}
+   272→   771→   771→              aria-label={isOpen ? `Collapse ${folder.name}` : `Expand ${folder.name}`}
+   273→   772→   772→              onClick={(e) => {
+   274→   773→   773→                e.stopPropagation();
+   275→   774→   774→                toggleExpand(folder.id);
+   276→   775→   775→              }}
+   277→   776→   776→            >
+   278→   777→   777→              <ChevronRight size={12} />
+   279→   778→   778→            </button>
+   280→   779→   779→          ) : (
+   281→   780→   780→            <span className="lib-tree-caret spacer" aria-hidden="true" />
+   282→   781→   781→          )}
+   283→   782→   782→          <Icon size={13} className="lib-tree-ico" aria-hidden="true" />
+   284→   783→   783→          <span
+   285→   784→   784→            className="lib-tree-dot"
+   286→   785→   785→            style={{ backgroundColor: folder.color }}
+   287→   786→   786→            role="button"
+   288→   787→   787→            tabIndex={0}
+   289→   788→   788→            title={`Cycle color (currently ${folder.color})`}
+   290→   789→   789→            aria-label={`Change color of folder ${folder.name}`}
+   291→   790→   790→            onClick={(e) => {
+   292→   791→   791→              e.stopPropagation();
+   293→   792→   792→              cycleColor(folder);
+   294→   793→   793→            }}
+   295→   794→   794→            onDoubleClick={(e) => e.stopPropagation()}
+   296→   795→   795→            onKeyDown={(e) => {
+   297→   796→   796→              if (e.key === 'Enter' || e.key === ' ') {
+   298→   797→   797→                e.preventDefault();
+   299→   798→   798→                e.stopPropagation();
+   300→   799→   799→                cycleColor(folder);
+   301→   800→   800→              }
+   302→   801→   801→            }}
+   303→   802→   802→          />
+   304→   803→   803→          {renameId === folder.id ? (
+   305→   804→   804→            <input
+   306→   805→   805→              className="lib-folder-input"
+   307→   806→   806→              value={renameText}
+   308→   807→   807→              autoFocus
+   309→   808→   808→              aria-label={`Rename folder ${folder.name}`}
+   310→   809→   809→              onChange={(e) => setRenameText(e.target.value)}
+   311→   810→   810→              onClick={(e) => e.stopPropagation()}
+   312→   811→   811→              onDoubleClick={(e) => e.stopPropagation()}
+   313→   812→   812→              onKeyDown={(e) => {
+   314→   813→   813→                if (e.key === 'Enter') commitRename();
+   315→   814→   814→                else if (e.key === 'Escape') setRenameId(null);
+   316→   815→   815→              }}
+   317→   816→   816→              onBlur={commitRename}
+   318→   817→   817→            />
+   319→   818→   818→          ) : (
+   320→   819→   819→            <span className="lib-tree-name">{folder.name}</span>
+   321→   820→   820→          )}
+   322→   821→   821→          <span className="lib-folder-count">{n}</span>
+   323→   822→   822→          <span className="lib-tree-acts">
+   324→   823→   823→            <button
+   325→   824→   824→              type="button"
+   326→   825→   825→              className="lib-tree-act"
+   327→   826→   826→              data-ico-btn
+   328→   827→   827→              title={`New subfolder in ${folder.name}`}
+   329→   828→   828→              aria-label={`Add subfolder to ${folder.name}`}
+   330→   829→   829→              onClick={(e) => {
+   331→   830→   830→                e.stopPropagation();
+   332→   831→   831→                setRenameId(null);
+   333→   832→   832→                setCreateParent(folder.id);
+   334→   833→   833→                setCreateText('');
+   335→   834→   834→                forceExpand(folder.id);
+   336→   835→   835→              }}
+   337→   836→   836→            >
+   338→   837→   837→              <Plus size={12} />
+   339→   838→   838→            </button>
+   340→   839→   839→            <button
+   341→   840→   840→              type="button"
+   342→   841→   841→              className="lib-tree-act"
+   343→   842→   842→              data-ico-btn
+   344→   843→   843→              title="Pick icon"
+   345→   844→   844→              aria-label={`Pick icon for ${folder.name}`}
+   346→   845→   845→              onClick={(e) => {
+   347→   846→   846→                e.stopPropagation();
+   348→   847→   847→                openIconPop(e, folder);
+   349→   848→   848→              }}
+   350→   849→   849→            >
+   351→   850→   850→              <Palette size={12} />
+   352→   851→   851→            </button>
+   353→   852→   852→            <button
+   354→   853→   853→              type="button"
+   355→   854→   854→              className="lib-tree-act danger"
+   356→   855→   855→              title={`Delete folder "${folder.name}"`}
+   357→   856→   856→              aria-label={`Delete folder ${folder.name}`}
+   358→   857→   857→              onClick={(e) => {
+   359→   858→   858→                e.stopPropagation();
+   360→   859→   859→                removeFolder(folder);
+   361→   860→   860→              }}
+   362→   861→   861→            >
+   363→   862→   862→              <X size={11} />
+   364→   863→   863→            </button>
+   365→   864→   864→          </span>
+   366→   865→   865→        </div>
+   367→   866→   866→        {createParent === folder.id && (
+   368→   867→   867→          <div className="lib-subrow" style={{ ['--lib-d' as string]: depth + 1 }}>
+   369→   868→   868→            <input
+   370→   869→   869→              className="lib-folder-input lib-tree-new"
+   371→   870→   870→              value={createText}
+   372→   871→   871→              autoFocus
+   373→   872→   872→              placeholder="Subfolder name…"
+   374→   873→   873→              aria-label="New subfolder name"
+   375→   874→   874→              onChange={(e) => setCreateText(e.target.value)}
+   376→   875→   875→              onKeyDown={(e) => {
+   377→   876→   876→                if (e.key === 'Enter') finishCreate(true);
+   378→   877→   877→                else if (e.key === 'Escape') {
+   379→   878→   878→                  setCreateParent(null);
+   380→   879→   879→                  setCreateText('');
+   381→   880→   880→                }
+   382→   881→   881→              }}
+   383→   882→   882→              onBlur={() => finishCreate(false)}
+   384→   883→   883→            />
+   385→   884→   884→          </div>
+   386→   885→   885→        )}
+   387→   886→   886→        {isOpen && children.map(renderRow)}
+   388→   887→   887→      </React.Fragment>
+   389→   888→   888→    );
+   390→   889→   889→  };
+   391→   890→   890→
+   392→   891→   891→  return (
+   393→   892→   892→    <aside className={`lib-tree ${treeOpen ? '' : 'closed'}`} aria-label="Library folder tree">
+   394→   893→   893→      <div className="lib-tree-head">
+   395→   894→   894→        <span className="lib-tree-title">
+   396→   895→   895→          <ListTree size={13} aria-hidden="true" /> Folders
+   397→   896→   896→        </span>
+   398→   897→   897→        <button
+   399→   898→   898→          type="button"
+   400→   899→   899→          className="lib-tree-fold"
+   401→   900→   900→          onClick={() => setTreeOpen((v) => !v)}
+   402→   901→   901→          aria-expanded={treeOpen}
+   403→   902→   902→          aria-label={treeOpen ? 'Collapse folder tree' : 'Expand folder tree'}
+   404→   903→   903→          title={treeOpen ? 'Collapse folder tree' : 'Expand folder tree'}
+   405→   904→   904→        >
+   406→   905→   905→          <ChevronDown size={14} />
+   407→   906→   906→        </button>
+   408→   907→   907→      </div>
+   409→   908→   908→      {treeOpen && (
+   410→   909→   909→        <div className="lib-tree-body" role="tree" aria-label="Folders">
+   411→   910→   910→          <div
+   412→   911→   911→            role="treeitem"
+   413→   912→   912→            aria-selected={folderFilter === 'all'}
+   414→   913→   913→            aria-level={1}
+   415→   914→   914→            tabIndex={0}
+   416→   915→   915→            className={`lib-tree-row vroot ${folderFilter === 'all' ? 'active' : ''} ${
+   417→   916→   916→              dropId === 'all' ? 'drop' : ''
+   418→   917→   917→            }`}
+   419→   918→   918→            title="All files — drop here to unfile"
+   420→   919→   919→            onClick={() => setFolderFilter('all')}
+   421→   920→   920→            onKeyDown={(e) => rowKey(e, () => setFolderFilter('all'))}
+   422→   921→   921→            onDragOver={(e) => onRowDragOver(e, 'all')}
+   423→   922→   922→            onDragLeave={() => onRowDragLeave('all')}
+   424→   923→   923→            onDrop={(e) => handleDrop(e, 'all')}
+   425→   924→   924→          >
+   426→   925→   925→            <span className="lib-tree-caret spacer" aria-hidden="true" />
+   427→   926→   926→            <LibraryIco size={13} className="lib-tree-ico" aria-hidden="true" />
+   428→   927→   927→            <span className="lib-tree-name">All files</span>
+   429→   928→   928→            <span className="lib-folder-count">{files.length}</span>
+   430→   929→   929→          </div>
+   431→   930→   930→          <div
+   432→   931→   931→            role="treeitem"
+   433→   932→   932→            aria-selected={folderFilter === 'unfiled'}
+   434→   933→   933→            aria-level={1}
+   435→   934→   934→            tabIndex={0}
+   436→   935→   935→            className={`lib-tree-row vroot ${folderFilter === 'unfiled' ? 'active' : ''} ${
+   437→   936→   936→              dropId === 'unfiled' ? 'drop' : ''
+   438→   937→   937→            }`}
+   439→   938→   938→            title="Files not in any folder — drop a file here to unfile it"
+   440→   939→   939→            onClick={() => setFolderFilter('unfiled')}
+   441→   940→   940→            onKeyDown={(e) => rowKey(e, () => setFolderFilter('unfiled'))}
+   442→   941→   941→            onDragOver={(e) => onRowDragOver(e, 'unfiled')}
+   443→   942→   942→            onDragLeave={() => onRowDragLeave('unfiled')}
+   444→   943→   943→            onDrop={(e) => handleDrop(e, 'unfiled')}
+   445→   944→   944→          >
+   446→   945→   945→            <span className="lib-tree-caret spacer" aria-hidden="true" />
+   447→   946→   946→            <Inbox size={13} className="lib-tree-ico" aria-hidden="true" />
+   448→   947→   947→            <span className="lib-tree-name">Unfiled</span>
+   449→   948→   948→            <span className="lib-folder-count">{unfiledCount}</span>
+   450→   949→   949→          </div>
+   451→   950→   950→          {tree.map(renderRow)}
+   452→   951→   951→          {createParent === 'root' ? (
+   453→   952→   952→            <div className="lib-subrow" style={{ ['--lib-d' as string]: 0 }}>
+   454→   953→   953→              <input
+   455→   954→   954→                className="lib-folder-input lib-tree-new"
+   456→   955→   955→                value={createText}
+   457→   956→   956→                autoFocus
+   458→   957→   957→                placeholder="Folder name…"
+   459→   958→   958→                aria-label="New folder name"
+   460→   959→   959→                onChange={(e) => setCreateText(e.target.value)}
+   461→   960→   960→                onKeyDown={(e) => {
+   462→   961→   961→                  if (e.key === 'Enter') finishCreate(true);
+   463→   962→   962→                  else if (e.key === 'Escape') {
+   464→   963→   963→                    setCreateParent(null);
+   465→   964→   964→                    setCreateText('');
+   466→   965→   965→                  }
+   467→   966→   966→                }}
+   468→   967→   967→                onBlur={() => finishCreate(false)}
+   469→   968→   968→              />
+   470→   969→   969→            </div>
+   471→   970→   970→          ) : (
+   472→   971→   971→            <button
+   473→   972→   972→              type="button"
+   474→   973→   973→              className="lib-newfolder-btn"
+   475→   974→   974→              onClick={() => {
+   476→   975→   975→                setRenameId(null);
+   477→   976→   976→                setIconPop(null);
+   478→   977→   977→                setCreateParent('root');
+   479→   978→   978→              }}
+   480→   979→   979→            >
+   481→   980→   980→              <FolderPlus size={13} /> New folder
+   482→   981→   981→            </button>
+   483→   982→   982→          )}
+   484→   983→   983→        </div>
+   485→   984→   984→      )}
+   486→   985→   985→      {iconPop &&
+   487→   986→   986→        createPortal(
+   488→   987→   987→          <div
+   489→   988→   988→            className="lib-icon-pop"
+   490→   989→   989→            style={{ top: iconPop.top, left: iconPop.left }}
+   491→   990→   990→            role="dialog"
+   492→   991→   991→            aria-label="Pick a folder icon"
+   493→   992→   992→          >
+   494→   993→   993→            {FOLDER_ICONS.map((key) => {
+   495→   994→   994→              const Ico = folderIconOf(key);
+   496→   995→   995→              const sel = folders.find((f) => f.id === iconPop.id)?.icon === key;
+   497→   996→   996→              return (
+   498→   997→   997→                <button
+   499→   998→   998→                  key={key}
+   500→   999→   999→                  type="button"
+   501→  1000→  1000→                  className={`lib-icon-cell ${sel ? 'sel' : ''}`}
+   502→  1001→  1001→                  title={key}
+   503→  1002→  1002→                  aria-label={`Icon: ${key}`}
+   504→  1003→  1003→                  aria-pressed={sel}
+   505→  1004→  1004→                  onClick={() => {
+   506→  1005→  1005→                    setFolderIcon(iconPop.id, key);
+   507→  1006→  1006→                    setIconPop(null);
+   508→  1007→  1007→                  }}
+   509→  1008→  1008→                >
+   510→  1009→  1009→                  <Ico size={15} />
+   511→  1010→  1010→                </button>
+   512→  1011→  1011→              );
+   513→  1012→  1012→            })}
+   514→  1013→  1013→          </div>,
+   515→  1014→  1014→          document.body
+   516→  1015→  1015→        )}
+   517→  1016→  1016→    </aside>
+   518→  1017→  1017→  );
+   519→  1018→  1018→}
+   520→  1019→  1019→
+   521→  1020→  1020→/* ---------- file card ---------- */
+   522→  1021→  1021→
+   523→  1022→  1022→function FileCard({
+   524→  1023→  1023→  file,
+   525→  1024→  1024→  linkedCount,
+   526→  1025→  1025→  onSelect,
+   527→  1026→  1026→}: {
+   528→  1027→  1027→  file: ResourceFile;
+   529→  1028→  1028→  linkedCount: number;
+   530→  1029→  1029→  onSelect: (file: ResourceFile, shift: boolean) => void;
+   531→  1030→  1030→}) {
+   532→  1031→  1031→  const deleteFile = useWB((s) => s.deleteFile);
+   533→  1032→  1032→  const folders = useWB((s) => s.libraryFolders);
+   534→  1033→  1033→  const moveFileToFolder = useWB((s) => s.moveFileToFolder);
+   535→  1034→  1034→  const setFolderFilter = useWB((s) => s.setLibraryFolderFilter);
+   536→  1035→  1035→  const confirm = useConfirm();
+   537→  1036→  1036→  const [linking, setLinking] = useState(false);
+   538→  1037→  1037→  const [dragging, setDragging] = useState(false);
+   539→  1038→  1038→  const { cover, failed } = useCoverWithFallback(file);
+   540→  1039→  1039→  const selecting = useSelectionMode();
+   541→  1040→  1040→  const selected = useIsSelected(file.id);
+   542→  1041→  1041→
+   543→  1042→  1042→  const folder = folders.find((f) => f.id === file.folderId) ?? null;
+   544→  1043→  1043→  const folderOpts = useMemo(() => flattenFolderOptions(folders), [folders]);
+   545→  1044→  1044→  const favCount = file.favoritePages?.length ?? 0;
+   546→  1045→  1045→  const annoCount = file.annoPages?.length ?? 0;
+   547→  1046→  1046→
+   548→  1047→  1047→  const pct = wbFileProgress(file);
+   549→  1048→  1048→  const readPages = wbFileReadPages(file);
+   550→  1049→  1049→  const minutes = wbFileMinutes(file);
+   551→  1050→  1050→  const st = wbFileDeadlineStatus(file);
+   552→  1051→  1051→
+   553→  1052→  1052→  const openReader = () => window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: file.id }));
+   554→  1053→  1053→  const openEdit = () => window.dispatchEvent(new CustomEvent('wb-open-file-form', { detail: file.id }));
+   555→  1054→  1054→
+   556→  1055→  1055→  const move = (folderId: string | null) => {
+   557→  1056→  1056→    moveFileToFolder(file.id, folderId);
+   558→  1057→  1057→    const f = folders.find((x) => x.id === folderId);
+   559→  1058→  1058→    toast(f ? 'Moved to folder' : 'Removed from folder', f ? f.name : file.title);
+   560→  1059→  1059→  };
+   561→  1060→  1060→
+   562→  1061→  1061→  /* the whole card is a drag source (its file id as text/plain) — but never from form controls */
+   563→  1062→  1062→  const onCardDragStart = (e: React.DragEvent) => {
+   564→  1063→  1063→    const t = e.target as HTMLElement;
+   565→  1064→  1064→    if (t.closest('input, textarea, select, button, a, label')) {
+   566→  1065→  1065→      e.preventDefault();
+   567→  1066→  1066→      return;
+   568→  1067→  1067→    }
+   569→  1068→  1068→    e.dataTransfer.setData('text/plain', file.id);
+   570→  1069→  1069→    e.dataTransfer.effectAllowed = 'move';
+   571→  1070→  1070→    setDragging(true);
+   572→  1071→  1071→  };
+   573→  1072→  1072→
+   574→  1073→  1073→  const remove = () => {
+   575→  1074→  1074→    if (!confirm(`Delete "${file.title}"? Its PDF, cover and reading history will be removed.`)) return;
+   576→  1075→  1075→    void purgeFileArtifacts(file.id).catch(() => undefined);
+   577→  1076→  1076→    deleteFile(file.id);
+   578→  1077→  1077→    toast('Deleted from library', file.title);
+   579→  1078→  1078→  };
+   580→  1079→  1079→
+   581→  1080→  1080→  let dueChip: React.ReactNode = null;
+   582→  1081→  1081→  if (file.deadline) {
+   583→  1082→  1082→    const du = daysUntil(file.deadline);
+   584→  1083→  1083→    const label =
+   585→  1084→  1084→      pct >= 100 ? 'done'
+   586→  1085→  1085→        : st === 'over' ? `${Math.abs(du)}d overdue`
+   587→  1086→  1086→          : du === 0 ? 'due today'
+   588→  1087→  1087→            : `${du}d left`;
+   589→  1088→  1088→    const cls =
+   590→  1089→  1089→      pct >= 100 ? 'chip-done'
+   591→  1090→  1090→        : st === 'over' ? 'chip-over'
+   592→  1091→  1091→          : st === 'soon' ? 'chip-soon'
+   593→  1092→  1092→            : 'chip-ok';
+   594→  1093→  1093→    dueChip = <span className={`chip ${cls}`}>{label}</span>;
+   595→  1094→  1094→  }
+   596→  1095→  1095→
+   597→  1096→  1096→  return (
+   598→  1097→  1097→    <article
+   599→  1098→  1098→      className={`lib-card ${file.archived ? 'archived' : ''} ${linking ? 'linking' : ''} ${
+   600→  1099→  1099→        dragging ? 'dragging' : ''
+   601→  1100→  1100→      } ${selecting ? 'selecting' : ''} ${selected ? 'selected' : ''}`}
+   602→  1101→  1101→      draggable
+   603→  1102→  1102→      onDragStart={onCardDragStart}
+   604→  1103→  1103→      onDragEnd={() => setDragging(false)}
+   605→  1104→  1104→      onClick={
+   606→  1105→  1105→        selecting
+   607→  1106→  1106→          ? (e) => {
+   608→  1107→  1107→              const t = e.target as HTMLElement;
+   609→  1108→  1108→              if (t.closest('button, select, input, textarea, a, label')) return;
+   610→  1109→  1109→              onSelect(file, e.shiftKey);
+   611→  1110→  1110→            }
+   612→  1111→  1111→          : undefined
+   613→  1112→  1112→      }
+   614→  1113→  1113→    >
+   615→  1114→  1114→      <div
+   616→  1115→  1115→        className="lib-cover"
+   617→  1116→  1116→        role="button"
+   618→  1117→  1117→        tabIndex={0}
+   619→  1118→  1118→        aria-label={
+   620→  1119→  1119→          selecting
+   621→  1120→  1120→            ? `Select "${file.title}"`
+   622→  1121→  1121→            : `Open "${file.title}" in the reader`
+   623→  1122→  1122→        }
+   624→  1123→  1123→        onClick={(e) => {
+   625→  1124→  1124→          if (selecting) {
+   626→  1125→  1125→            e.stopPropagation();
+   627→  1126→  1126→            onSelect(file, e.shiftKey);
+   628→  1127→  1127→            return;
+   629→  1128→  1128→          }
+   630→  1129→  1129→          openReader();
+   631→  1130→  1130→        }}
+   632→  1131→  1131→        onKeyDown={(e) => {
+   633→  1132→  1132→          if (e.key === 'Enter' || e.key === ' ') {
+   634→  1133→  1133→            e.preventDefault();
+   635→  1134→  1134→            if (selecting) onSelect(file, e.shiftKey);
+   636→  1135→  1135→            else openReader();
+   637→  1136→  1136→          }
+   638→  1137→  1137→        }}
+   639→  1138→  1138→      >
+   640→  1139→  1139→        {cover ? (
+   641→  1140→  1140→          <img className="lib-cover-img" src={cover} alt="" loading="lazy" />
+   642→  1141→  1141→        ) : failed ? (
+   643→  1142→  1142→          <div className="lib-cover-fallback" aria-hidden="true">
+   644→  1143→  1143→            <FileText />
+   645→  1144→  1144→          </div>
+   646→  1145→  1145→        ) : (
+   647→  1146→  1146→          <div className="lib-cover-skel" aria-hidden="true" />
+   648→  1147→  1147→        )}
+   649→  1148→  1148→        <span className="lib-page-badge mono" title="Current reading position">
+   650→  1149→  1149→          p.{file.currentPage}/{file.pageCount}
+   651→  1150→  1150→        </span>
+   652→  1151→  1151→        {selecting && (
+   653→  1152→  1152→          <button
+   654→  1153→  1153→            type="button"
+   655→  1154→  1154→            className={`lib-check ${selected ? 'on' : ''}`}
+   656→  1155→  1155→            aria-pressed={selected}
+   657→  1156→  1156→            aria-label={selected ? `Deselect ${file.title}` : `Select ${file.title}`}
+   658→  1157→  1157→            onClick={(e) => {
+   659→  1158→  1158→              e.stopPropagation();
+   660→  1159→  1159→              onSelect(file, e.shiftKey);
+   661→  1160→  1160→            }}
+   662→  1161→  1161→          >
+   663→  1162→  1162→            {selected && <Check size={13} />}
+   664→  1163→  1163→          </button>
+   665→  1164→  1164→        )}
+   666→  1165→  1165→      </div>
+   667→  1166→  1166→
+   668→  1167→  1167→      <div className="lib-body">
+   669→  1168→  1168→        <div
+   670→  1169→  1169→          className="lib-title"
+   671→  1170→  1170→          role="button"
+   672→  1171→  1171→          tabIndex={0}
+   673→  1172→  1172→          title={selecting ? `Select "${file.title}"` : `${file.title} — click to edit`}
+   674→  1173→  1173→          onClick={(e) => {
+   675→  1174→  1174→            if (selecting) {
+   676→  1175→  1175→              e.stopPropagation();
+   677→  1176→  1176→              onSelect(file, e.shiftKey);
+   678→  1177→  1177→              return;
+   679→  1178→  1178→            }
+   680→  1179→  1179→            openEdit();
+   681→  1180→  1180→          }}
+   682→  1181→  1181→          onKeyDown={(e) => {
+   683→  1182→  1182→            if (e.key === 'Enter' || e.key === ' ') {
+   684→  1183→  1183→              e.preventDefault();
+   685→  1184→  1184→              if (selecting) onSelect(file, e.shiftKey);
+   686→  1185→  1185→              else openEdit();
+   687→  1186→  1186→            }
+   688→  1187→  1187→          }}
+   689→  1188→  1188→        >
+   690→  1189→  1189→          {file.title}
+   691→  1190→  1190→        </div>
+   692→  1191→  1191→
+   693→  1192→  1192→        <div className="lib-chips">
+   694→  1193→  1193→          {dueChip}
+   695→  1194→  1194→          {file.archived && <span className="chip chip-ok">archived</span>}
+   696→  1195→  1195→          {folder && (
+   697→  1196→  1196→            <button
+   698→  1197→  1197→              type="button"
+   699→  1198→  1198→              className="lib-card-folder"
+   700→  1199→  1199→              title={`In folder "${folder.name}" — click to filter`}
+   701→
+   702→[showing lines 500-1199 of 1759; use offset=1200 with limit to continue reading]

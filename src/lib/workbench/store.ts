@@ -4,11 +4,12 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
-  ActiveTimer, CalendarSystem, ClockType, Entry, FilePlanBlock, FocusTiming, GraphView, Habit,
-  Item, ItemStatus, JournalEntry, Label, ReadingSession, ReportRange, ResourceFile, Roadmap,
+  ActiveTimer, CalendarSystem, ClockType, Entry, FilePlanBlock, FocusClockCfg, FocusCustomBg,
+  FocusTiming, GraphView, Habit, Item, ItemStatus, JournalEntry, Label, LibraryFolder,
+  ReadingSession, ReaderPrefs, ReportCustomRange, ReportRange, ResourceFile, Roadmap,
   RoadmapEdge, RoadmapNode, ThemeId, ViewId,
 } from './types';
-import { SWATCHES, FOCUS_PRESETS } from './types';
+import { FOLDER_ICONS, SWATCHES, FOCUS_PRESETS, FOLDER_SWATCHES } from './types';
 import {
   entriesInRange, getFocusTiming, hhmm, isoDate, todayStr, uid,
 } from './helpers';
@@ -64,11 +65,25 @@ export function makeFile(partial: Partial<ResourceFile> = {}): ResourceFile {
     currentPage: 1,
     pageSeconds: {},
     readPages: [],
+    favoritePages: [],
+    annoPages: [],
+    folderId: null,
     lastReadAt: null,
     archived: false,
     ...partial,
   };
 }
+
+export const DEFAULT_READER_PREFS: ReaderPrefs = {
+  viewMode: 'single',
+  tool: 'select',
+  themeMode: 'light',
+  custom: { brightness: 100, contrast: 100, sepia: 0 },
+  penColor: '#FB7185',
+  penWidth: 3,
+  hlColor: '#FDE68A',
+  hlWidth: 18,
+};
 
 export function makeRoadmap(partial: Partial<Roadmap> = {}): Roadmap {
   const now = new Date().toISOString();
@@ -115,6 +130,18 @@ export interface WBState {
   filePlans: FilePlanBlock[];
   roadmaps: Roadmap[];
   activeRoadmapId: string | null;
+  libraryFolders: LibraryFolder[];
+  libraryFolderFilter: string; // 'all' | 'unfiled' | folder id
+  librarySearch: string;
+  readerPrefs: ReaderPrefs;
+  /* v6: focus — custom backgrounds + flexible clock */
+  focusCustomBgs: FocusCustomBg[];
+  focusClockCfg: FocusClockCfg;
+  focusAutoColor: boolean; // auto-theme UI accent from background
+  /* v6: general */
+  sidebarCollapsed: boolean;
+  reportCustom: ReportCustomRange;
+
   /* ui */
   theme: ThemeId;
   view: ViewId;
@@ -147,6 +174,7 @@ export interface WBState {
   cycleTheme: () => void;
   setGraphView: (g: GraphView) => void;
   setReportRange: (r: ReportRange) => void;
+  setReportCustom: (patch: Partial<ReportCustomRange>) => void;
   setCalendarSystem: (c: CalendarSystem) => void;
   calNavigate: (delta: number) => void;
   calToday: () => void;
@@ -207,6 +235,35 @@ export interface WBState {
   setPlannerDate: (d: string) => void;
   navigatePlanner: (deltaDays: number) => void;
   setLibraryFilter: (f: 'all' | 'reading' | 'unread' | 'deadline' | 'archived') => void;
+
+  /* v5: library folders + search */
+  addLibraryFolder: (name: string, parentId?: string | null) => LibraryFolder;
+  renameLibraryFolder: (id: string, name: string) => void;
+  setLibraryFolderColor: (id: string, color: string) => void;
+  setLibraryFolderIcon: (id: string, icon: string) => void;
+  deleteLibraryFolder: (id: string) => void; // cascade: subfolders flattened, files unfiled
+  moveLibraryFolder: (id: string, parentId: string | null) => void; // cycle-safe
+  moveFileToFolder: (fileId: string, folderId: string | null) => void;
+  setLibraryFolderFilter: (f: string) => void;
+  setLibrarySearch: (q: string) => void;
+
+  /* v5: reader — favorites + annotation mirror + prefs */
+  toggleFileFavoritePage: (fileId: string, page: number) => void;
+  setFileAnnoPages: (fileId: string, pages: string[]) => void;
+  updateReaderPrefs: (patch: Partial<ReaderPrefs>) => void;
+
+  /* v6: focus — custom backgrounds + clock config + auto color */
+  addFocusCustomBg: (label: string, dataUrl: string, accent: string) => FocusCustomBg;
+  removeFocusCustomBg: (id: string) => void;
+  setFocusClockCfg: (patch: Partial<FocusClockCfg>) => void;
+  resetFocusClockCfg: () => void;
+  setFocusAutoColor: (v: boolean) => void;
+
+  /* v6: general */
+  toggleSidebarCollapsed: () => void;
+
+  /* v5: roadmap utilities */
+  duplicateRoadmap: (id: string) => Roadmap | null;
 
   startTimer: (labelIds: string[], note: string, itemIds?: string[]) => void;
   startItemFocus: (itemId: string) => boolean;
@@ -290,6 +347,15 @@ export const useWB = create<WBState>()(
       filePlans: [],
       roadmaps: [],
       activeRoadmapId: null,
+      libraryFolders: [],
+      libraryFolderFilter: 'all',
+      librarySearch: '',
+      readerPrefs: { ...DEFAULT_READER_PREFS },
+      focusCustomBgs: [],
+      focusClockCfg: { size: 100, xPct: 50, yPct: 46, accent: 'auto' },
+      focusAutoColor: true,
+      sidebarCollapsed: false,
+      reportCustom: { from: todayStr(), to: todayStr() },
 
       theme: 'light',
       view: 'today',
@@ -302,7 +368,7 @@ export const useWB = create<WBState>()(
       plannerDate: todayStr(),
       libraryFilter: 'all',
       focusOpen: false,
-      focusClockType: 'analog',
+      focusClockType: 'aura',
       focusBackground: 'aurora',
       focusPreset: '25',
       focusCustomWork: 45,
@@ -324,6 +390,7 @@ export const useWB = create<WBState>()(
       },
       setGraphView: (g) => set({ graphView: g }),
       setReportRange: (r) => set({ reportRange: r }),
+      setReportCustom: (patch) => set((s) => ({ reportCustom: { ...s.reportCustom, ...patch } })),
       setCalendarSystem: (c) => set({ calendarSystem: c, calMonthOffset: 0 }),
       calNavigate: (delta) => set((s) => ({ calMonthOffset: s.calMonthOffset + delta })),
       calToday: () => set({ calMonthOffset: 0, calendarSelectedDate: todayStr() }),
@@ -561,6 +628,30 @@ export const useWB = create<WBState>()(
           activeRoadmapId: s.activeRoadmapId === id ? null : s.activeRoadmapId,
         }));
       },
+      duplicateRoadmap: (id) => {
+        const src = get().roadmaps.find((r) => r.id === id);
+        if (!src) return null;
+        get().snapshot();
+        const now = new Date().toISOString();
+        const idMap = new Map<string, string>();
+        src.nodes.forEach((n) => idMap.set(n.id, uid()));
+        const copy: Roadmap = {
+          id: uid(),
+          title: `${src.title} (copy)`,
+          description: src.description,
+          nodes: src.nodes.map((n) => ({ ...n, id: idMap.get(n.id) || uid() })),
+          edges: src.edges.map((e) => ({
+            ...e,
+            id: uid(),
+            from: idMap.get(e.from) || e.from,
+            to: idMap.get(e.to) || e.to,
+          })),
+          createdAt: now,
+          updatedAt: now,
+        };
+        set((s) => ({ roadmaps: [...s.roadmaps, copy] }));
+        return copy;
+      },
       setActiveRoadmap: (id) => set({ activeRoadmapId: id }),
       addRoadmapNode: (roadmapId, node) => {
         const full: RoadmapNode = { ...node, id: uid() };
@@ -637,6 +728,119 @@ export const useWB = create<WBState>()(
           return { plannerDate: isoDate(d) };
         }),
       setLibraryFilter: (f) => set({ libraryFilter: f }),
+
+      /* ---------- v5: library folders + search ---------- */
+      setLibraryFolderFilter: (f) => set({ libraryFolderFilter: f }),
+      setLibrarySearch: (q) => set({ librarySearch: q }),
+      addLibraryFolder: (name, parentId = null) => {
+        const folder: LibraryFolder = {
+          id: uid(),
+          name: name.trim() || 'New folder',
+          color: FOLDER_SWATCHES[Math.floor(Math.random() * FOLDER_SWATCHES.length)],
+          icon: FOLDER_ICONS[Math.floor(Math.random() * Math.min(4, FOLDER_ICONS.length))],
+          parentId,
+          createdAt: new Date().toISOString(),
+        };
+        set((s) => ({ libraryFolders: [...s.libraryFolders, folder] }));
+        return folder;
+      },
+      renameLibraryFolder: (id, name) =>
+        set((s) => ({
+          libraryFolders: s.libraryFolders.map((f) =>
+            f.id === id ? { ...f, name: name.trim() || f.name } : f
+          ),
+        })),
+      setLibraryFolderColor: (id, color) =>
+        set((s) => ({
+          libraryFolders: s.libraryFolders.map((f) => (f.id === id ? { ...f, color } : f)),
+        })),
+      setLibraryFolderIcon: (id, icon) =>
+        set((s) => ({
+          libraryFolders: s.libraryFolders.map((f) => (f.id === id ? { ...f, icon } : f)),
+        })),
+      deleteLibraryFolder: (id) => {
+        /* cascade: descendants are flattened to the deleted folder's parent,
+           files inside (direct or nested) move up to that parent */
+        set((s) => {
+          const target = s.libraryFolders.find((f) => f.id === id);
+          const newParent = target?.parentId ?? null;
+          const descendants = new Set<string>([id]);
+          let grew = true;
+          while (grew) {
+            grew = false;
+            for (const f of s.libraryFolders) {
+              if (f.parentId && descendants.has(f.parentId) && !descendants.has(f.id)) {
+                descendants.add(f.id);
+                grew = true;
+              }
+            }
+          }
+          return {
+            libraryFolders: s.libraryFolders
+              .filter((f) => f.id !== id)
+              .map((f) => {
+                if (descendants.has(f.id)) return { ...f, parentId: newParent };
+                if (f.parentId === id) return { ...f, parentId: newParent };
+                return f;
+              }),
+            files: s.files.map((f) => {
+              if (descendants.has(f.folderId || '')) return { ...f, folderId: newParent };
+              return f;
+            }),
+            libraryFolderFilter:
+              s.libraryFolderFilter === id || descendants.has(s.libraryFolderFilter)
+                ? 'all'
+                : s.libraryFolderFilter,
+          };
+        });
+      },
+      moveLibraryFolder: (id, parentId) => {
+        set((s) => {
+          if (id === parentId) return {};
+          /* reject cycles: parentId must not be a descendant of id */
+          if (parentId) {
+            const descendants = new Set<string>([id]);
+            let grew = true;
+            while (grew) {
+              grew = false;
+              for (const f of s.libraryFolders) {
+                if (f.parentId && descendants.has(f.parentId) && !descendants.has(f.id)) {
+                  descendants.add(f.id);
+                  grew = true;
+                }
+              }
+            }
+            if (descendants.has(parentId)) return {};
+          }
+          return {
+            libraryFolders: s.libraryFolders.map((f) => (f.id === id ? { ...f, parentId } : f)),
+          };
+        });
+      },
+
+      moveFileToFolder: (fileId, folderId) =>
+        set((s) => ({
+          files: s.files.map((f) => (f.id === fileId ? { ...f, folderId } : f)),
+        })),
+
+      /* ---------- v5: reader — favorites, annotation mirror, prefs ---------- */
+      toggleFileFavoritePage: (fileId, page) =>
+        set((s) => ({
+          files: s.files.map((f) => {
+            if (f.id !== fileId) return f;
+            const key = String(page);
+            const favoritePages = (f.favoritePages || []).includes(key)
+              ? (f.favoritePages || []).filter((p) => p !== key)
+              : [...(f.favoritePages || []), key];
+            return { ...f, favoritePages };
+          }),
+        })),
+      setFileAnnoPages: (fileId, pages) =>
+        set((s) => ({
+          files: s.files.map((f) => (f.id === fileId ? { ...f, annoPages: pages } : f)),
+        })),
+      updateReaderPrefs: (patch) =>
+        set((s) => ({ readerPrefs: { ...s.readerPrefs, ...patch } })),
 
       startTimer: (labelIds, note, itemIds = []) => {
         get().snapshot();
@@ -793,6 +997,28 @@ export const useWB = create<WBState>()(
       setFocusCustom: (work, brk) => set({ focusCustomWork: work, focusCustomBreak: brk }),
       toggleFocusCompact: () => set((s) => ({ focusCompact: !s.focusCompact })),
 
+      /* ---------- v6: focus — custom backgrounds + flexible clock + auto color ---------- */
+      addFocusCustomBg: (label, dataUrl, accent) => {
+        const bg: FocusCustomBg = { id: uid(), label: label.trim() || 'My background', dataUrl, accent };
+        set((s) => ({
+          focusCustomBgs: [...s.focusCustomBgs.slice(-2), bg], // keep at most 3
+          focusBackground: `custom:${bg.id}`,
+        }));
+        return bg;
+      },
+      removeFocusCustomBg: (id) =>
+        set((s) => ({
+          focusCustomBgs: s.focusCustomBgs.filter((b) => b.id !== id),
+          focusBackground: s.focusBackground === `custom:${id}` ? 'aurora' : s.focusBackground,
+        })),
+      setFocusClockCfg: (patch) => set((s) => ({ focusClockCfg: { ...s.focusClockCfg, ...patch } })),
+      resetFocusClockCfg: () =>
+        set({ focusClockCfg: { size: 100, xPct: 50, yPct: 46, accent: 'auto' } }),
+      setFocusAutoColor: (v) => set({ focusAutoColor: v }),
+
+      /* ---------- v6: general ---------- */
+      toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
       snapshot: () =>
         set((s) => ({
           undoStack: [...s.undoStack.slice(-(MAX_HIST - 1)), coreSnapshot(s)],
@@ -929,7 +1155,7 @@ export const useWB = create<WBState>()(
       name: STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
-      version: 4,
+      version: 5,
       migrate: (persisted: unknown) => {
         const p = (persisted || {}) as Record<string, unknown>;
         const items = Array.isArray(p.items)
@@ -938,8 +1164,16 @@ export const useWB = create<WBState>()(
         const stats = (p.stats as WBState['stats']) || { focusSessions: 0, focusMinutes: 0, readingMinutes: 0, pagesRead: 0 };
         if (typeof stats.readingMinutes !== 'number') stats.readingMinutes = 0;
         if (typeof stats.pagesRead !== 'number') stats.pagesRead = 0;
+        const prefsRaw = (p.readerPrefs || {}) as Partial<ReaderPrefs>;
+        /* v6 clock ids — legacy clocks replaced by the new set */
+        const legacyClock = p.focusClockType as string | undefined;
+        const clockType: ClockType =
+          legacyClock === 'analog' || legacyClock === 'digital' || legacyClock === 'minimal' || legacyClock === 'flip'
+            ? 'aura'
+            : ((legacyClock as ClockType) || 'aura');
         return {
           ...p,
+          focusClockType: clockType,
           items,
           files: Array.isArray(p.files) ? (p.files as Partial<ResourceFile>[]).map((f) => makeFile(f)) : [],
           readingSessions: Array.isArray(p.readingSessions) ? p.readingSessions : [],
@@ -949,6 +1183,35 @@ export const useWB = create<WBState>()(
           plannerMode: (p.plannerMode as 'day' | 'week') ?? 'day',
           plannerDate: (p.plannerDate as string) ?? todayStr(),
           libraryFilter: (p.libraryFilter as WBState['libraryFilter']) ?? 'all',
+          libraryFolders: Array.isArray(p.libraryFolders)
+            ? (p.libraryFolders as Partial<LibraryFolder>[]).map((f) => ({
+                id: f.id || uid(),
+                name: f.name || 'Folder',
+                color: f.color || FOLDER_SWATCHES[0],
+                icon: (f.icon as string) || 'folder',
+                parentId: (f.parentId as string | null) ?? null,
+                createdAt: f.createdAt || new Date().toISOString(),
+              }))
+            : [],
+          libraryFolderFilter: (p.libraryFolderFilter as string) || 'all',
+          librarySearch: (p.librarySearch as string) || '',
+          readerPrefs: {
+            ...DEFAULT_READER_PREFS,
+            ...prefsRaw,
+            custom: { ...DEFAULT_READER_PREFS.custom, ...(prefsRaw.custom || {}) },
+          },
+          focusCustomBgs: Array.isArray(p.focusCustomBgs) ? (p.focusCustomBgs as FocusCustomBg[]) : [],
+          focusClockCfg: {
+            size: 100, xPct: 50, yPct: 46, accent: 'auto',
+            ...((p.focusClockCfg as Partial<FocusClockCfg>) || {}),
+          },
+          focusAutoColor: (p.focusAutoColor as boolean) ?? true,
+          sidebarCollapsed: (p.sidebarCollapsed as boolean) ?? false,
+          reportCustom: {
+            from: todayStr(),
+            to: todayStr(),
+            ...((p.reportCustom as Partial<ReportCustomRange>) || {}),
+          },
           stats,
         };
       },
@@ -963,12 +1226,21 @@ export const useWB = create<WBState>()(
         plannerMode: s.plannerMode,
         plannerDate: s.plannerDate,
         libraryFilter: s.libraryFilter,
+        libraryFolders: s.libraryFolders,
+        libraryFolderFilter: s.libraryFolderFilter,
+        librarySearch: s.librarySearch,
+        readerPrefs: s.readerPrefs,
         focusClockType: s.focusClockType,
         focusBackground: s.focusBackground,
         focusPreset: s.focusPreset,
         focusCustomWork: s.focusCustomWork,
         focusCustomBreak: s.focusCustomBreak,
         focusCompact: s.focusCompact,
+        focusCustomBgs: s.focusCustomBgs,
+        focusClockCfg: s.focusClockCfg,
+        focusAutoColor: s.focusAutoColor,
+        sidebarCollapsed: s.sidebarCollapsed,
+        reportCustom: s.reportCustom,
         dailyCapacityMin: s.dailyCapacityMin,
         stats: s.stats,
         items: s.items,

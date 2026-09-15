@@ -1,9 +1,11 @@
-/* ==================== Library: Reader Overlay (pdf.js canvas) ====================
-   Full-screen reading surface for a stored PDF.
-   - Fit-width / zoom rendering with serialized page paints (no render races)
-   - Per-page reading-second tracking (flushed to the store every 10s / page change / close)
-   - Focus-read integration (pomodoro started from the reader)
-   - Immersive mode with auto-hiding chrome */
+/* ==================== Reader v2 — PDF reading surface ====================
+   Full-screen reading overlay for a stored PDF:
+   - Single-page AND continuous scroll modes (virtualized strip)
+   - Annotation engine: pen / highlighter / stroke-eraser + undo/redo + autosave (IDB)
+   - Page themes: light / dark / warm / custom (applied to the page, not the ink)
+   - Favorite pages with review mode ("review at end of day")
+   - Pages panel: lazy thumbnails with read/unread/favorites/annotated filters
+   - Per-page reading-second tracking, focus-read pomodoro, immersive chrome */
 
 'use client';
 
@@ -11,34 +13,93 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
-  BookCheck, BookPlus, ChevronLeft, ChevronRight, Clock, Eye, FileText, FileWarning,
-  MoveHorizontal, PanelTopClose, PanelTopOpen, Pause, Play, SkipForward, Square, SquareCheck,
-  StickyNote, Target, Timer, X, ZoomIn, ZoomOut,
+  BookCheck, BookPlus, BookmarkCheck, ChevronLeft, ChevronRight, Clock, Download, Eraser, Eye,
+  FileText, FileWarning, Highlighter, LayoutGrid, MoveHorizontal, PanelTopClose, PanelTopOpen,
+  Pause, Pen, Play, ScrollText, SkipForward, Square, SquareCheck, Star, StickyNote, Sun, Moon,
+  Leaf, SlidersHorizontal, Target, Timer, Undo2, Redo2, Trash2, X, ZoomIn, ZoomOut, MousePointer2,
 } from 'lucide-react';
 import {
   PAGE_READ_THRESHOLD_SEC, useWB, wbFileDeadlineStatus, wbFileProgress, wbFileReadPages,
   wbItemsForFile,
 } from '@/lib/workbench/store';
-import { daysUntil, fmtClock, getFocusTiming, isoDate } from '@/lib/workbench/helpers';
-import { loadFileDoc, renderPageToCanvas } from '@/lib/workbench/pdf';
+import { cacheAnnos, fetchAnnosCached, putAnnos } from '@/lib/workbench/idb';
+import { drawStrokes } from './annotations';
+import type { AnnoCommand } from './annotations';
+import { applyAnnoCommand, createLimiter, revertAnnoCommand, UNDO_CAP } from './annotations';
+import { renderPageToCanvas } from '@/lib/workbench/pdf';
+import { HL_SWATCHES, PEN_SWATCHES } from '@/lib/workbench/types';
+import type { PageAnnoMap, ReaderThemeMode, ReaderTool, ReaderViewMode, Stroke } from '@/lib/workbench/types';
 import type { Item } from '@/lib/workbench/types';
-import { Btn, IconBtn, toast, useNow } from '../ui/primitives';
+import { daysUntil, fmtClock, getFocusTiming, isoDate } from '@/lib/workbench/helpers';
+import { PagesPanel, filterLabel } from './PagesPanel';
+import type { FilterCounts, PageFilter } from './PagesPanel';
+import { PdfPageCard } from './PdfPageCard';
+import { Btn, IconBtn, toast, useConfirm, useNow } from '../ui/primitives';
 import './reader.css';
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 1.1;
 const FLUSH_EVERY_MS = 10_000;
+const ANNO_SAVE_DEBOUNCE_MS = 700;
 const CHROME_IDLE_MS = 2_600;
 const MIN_SESSION_MS = 60_000;
+const DIMS_FETCH_CAP = 150;
 
 type LoadState = 'loading' | 'ready' | 'error';
+type SaveState = 'idle' | 'saving' | 'saved';
 
 const ITEM_ICON: Record<Item['type'], React.ReactNode> = {
   goal: <Target size={12} />,
   task: <SquareCheck size={12} />,
   note: <StickyNote size={12} />,
 };
+
+const THEME_ORDER: ReaderThemeMode[] = ['light', 'dark', 'warm', 'custom'];
+
+/* Custom-theme quick presets — set all three sliders at once. */
+const THEME_PRESETS: { id: string; label: string; values: { brightness: number; contrast: number; sepia: number } }[] = [
+  { id: 'night', label: 'Night reading', values: { brightness: 85, contrast: 110, sepia: 25 } },
+  { id: 'paper', label: 'Paper', values: { brightness: 100, contrast: 100, sepia: 35 } },
+  { id: 'contrast', label: 'High contrast', values: { brightness: 95, contrast: 140, sepia: 0 } },
+];
+
+/* Width of the custom-theme popover (matches .rd-theme-pop CSS). */
+const THEME_POP_W = 262;
+
+type RGB = [number, number, number];
+
+function mixRgb(a: RGB, b: RGB, t: number): RGB {
+  const c = (i: number): number => Math.round(a[i] + (b[i] - a[i]) * t);
+  return [c(0), c(1), c(2)];
+}
+
+function rgbCss(c: RGB): string {
+  return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+}
+
+function clamp01v(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+/** Tint for the surface behind the canvas so themed pages have no white glare. */
+function pageSurfaceBg(mode: ReaderThemeMode, custom: { brightness: number; sepia: number }): string {
+  const white: RGB = [255, 255, 255];
+  switch (mode) {
+    case 'dark':
+      return '#15181a';
+    case 'warm':
+      return '#f3ecdc';
+    case 'custom': {
+      let c = mixRgb(white, [0xef, 0xe3, 0xcd], clamp01v(custom.sepia / 100));
+      const dim = clamp01v((100 - custom.brightness) / 100);
+      c = mixRgb(c, [0x16, 0x19, 0x18], dim * 0.9);
+      return rgbCss(c);
+    }
+    default:
+      return '#ffffff';
+  }
+}
 
 function clampPage(p: number, total: number): number {
   const max = Math.max(1, total);
@@ -51,56 +112,98 @@ function fmtRem(secs: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+function themeFilterOf(mode: ReaderThemeMode, custom: { brightness: number; contrast: number; sepia: number }): string {
+  switch (mode) {
+    case 'dark':
+      return 'invert(1) hue-rotate(180deg) brightness(0.92) contrast(1.06)';
+    case 'warm':
+      return 'sepia(0.45) brightness(1.05)';
+    case 'custom':
+      return `brightness(${custom.brightness / 100}) contrast(${custom.contrast / 100}) sepia(${custom.sepia / 100})`;
+    default:
+      return 'none';
+  }
+}
+
+const dimsLimiter = createLimiter(8);
+
 export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: () => void }) {
   /* ---------- store ---------- */
   const file = useWB((s) => s.files.find((f) => f.id === fileId));
   const items = useWB((s) => s.items);
   const activeTimer = useWB((s) => s.activeTimer);
+  const prefs = useWB((s) => s.readerPrefs);
+  const updateReaderPrefs = useWB((s) => s.updateReaderPrefs);
   const setFilePosition = useWB((s) => s.setFilePosition);
   const addFilePageSeconds = useWB((s) => s.addFilePageSeconds);
   const markFilePage = useWB((s) => s.markFilePage);
+  const toggleFileFavoritePage = useWB((s) => s.toggleFileFavoritePage);
+  const setFileAnnoPages = useWB((s) => s.setFileAnnoPages);
   const logReadingSession = useWB((s) => s.logReadingSession);
   const startFileFocus = useWB((s) => s.startFileFocus);
   const pausePomodoro = useWB((s) => s.pausePomodoro);
   const resumePomodoro = useWB((s) => s.resumePomodoro);
   const advancePomodoro = useWB((s) => s.advancePomodoro);
   const stopTimer = useWB((s) => s.stopTimer);
+  const confirm = useConfirm();
 
   const now = useNow();
 
-  /* ---------- view state ---------- */
+  /* ---------- document loading ---------- */
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [loadError, setLoadError] = useState('');
+  const [dims, setDims] = useState<{ w: number; h: number }[]>([]);
+  const numPages = doc?.numPages ?? file?.pageCount ?? 1;
+
+  /* ---------- annotations ---------- */
+  const [annos, setAnnos] = useState<PageAnnoMap>({});
+  const [annosReady, setAnnosReady] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>('idle');
+  const undoRef = useRef<AnnoCommand[]>([]);
+  const redoRef = useRef<AnnoCommand[]>([]);
+  const [, forceAnnoTick] = useState(0); // re-render for undo/redo availability
+  const annosRef = useRef<PageAnnoMap>({});
+  const dirtyRef = useRef(false);
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* ---------- view state ---------- */
   const [page, setPage] = useState(() => clampPage(file?.currentPage ?? 1, file?.pageCount ?? 1));
   const [pageInput, setPageInput] = useState(() => String(clampPage(file?.currentPage ?? 1, file?.pageCount ?? 1)));
   const [fit, setFit] = useState(true);
   const [scale, setScale] = useState(1);
-  const [baseW, setBaseW] = useState(0);
   const [stageW, setStageW] = useState(0);
-  const [rendering, setRendering] = useState(false);
-  const [hasPaint, setHasPaint] = useState(false);
   const [immersive, setImmersive] = useState(false);
   const [chromeOn, setChromeOn] = useState(true);
+  const [pagesOpen, setPagesOpen] = useState(false);
+  const [filter, setFilter] = useState<PageFilter>('all');
+  const [review, setReview] = useState(false);
+  const [themePop, setThemePop] = useState(false);
+  const [themePopPos, setThemePopPos] = useState<{ left: number; bottom: number } | null>(null);
+  const themeAnchorRef = useRef<HTMLSpanElement | null>(null);
+  const themePopRef = useRef<HTMLDivElement | null>(null);
 
-  const numPages = doc?.numPages ?? file?.pageCount ?? 1;
-  const effScale = fit && baseW > 0 && stageW > 0 ? Math.max(0.05, stageW / baseW) : scale;
+  const viewMode = prefs.viewMode;
+  const tool = prefs.tool;
+  const themeMode = prefs.themeMode;
+  const themeFilter = useMemo(() => themeFilterOf(themeMode, prefs.custom), [themeMode, prefs.custom]);
+  const pageBg = useMemo(() => pageSurfaceBg(themeMode, prefs.custom), [themeMode, prefs.custom]);
 
-  /* ---------- refs (session tracking + render serialization) ---------- */
+  /* ---------- refs (session tracking + render bookkeeping) ---------- */
   const stageRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const pageInputRef = useRef<HTMLInputElement | null>(null);
+  const stripScrollRef = useRef<HTMLDivElement | null>(null);
+  const pageElsRef = useRef<Map<number, HTMLElement>>(new Map());
+  const visRatiosRef = useRef<Map<number, number>>(new Map());
   const sessionStartRef = useRef(Date.now());
   const startPageRef = useRef(page);
   const pageRef = useRef(page);
-  const pageSecsRef = useRef(0); // visible seconds on the current page (display)
-  const pendingRef = useRef<Map<number, number>>(new Map()); // page -> unflushed seconds
-  const sessionTotalsRef = useRef<Map<number, number>>(new Map()); // page -> session seconds
+  const pageSecsRef = useRef(0);
+  const pendingRef = useRef<Map<number, number>>(new Map());
+  const sessionTotalsRef = useRef<Map<number, number>>(new Map());
   const visitedRef = useRef<Set<number>>(new Set());
   const newlyReadRef = useRef<Set<number>>(new Set());
-  const renderSeqRef = useRef(0);
-  const renderChainRef = useRef<Promise<void>>(Promise.resolve());
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reviewScrollGuardRef = useRef(false);
 
   /* immutable snapshot of pageSeconds/readPages at mount — threshold crossing math */
   const snapshotRef = useRef<{ secs: Record<string, number>; read: Set<string> } | null>(null);
@@ -114,7 +217,16 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
   const fileProgress = file ? wbFileProgress(file) : 0;
   const readCount = file ? wbFileReadPages(file) : 0;
   const pageIsRead = !!file && file.readPages.includes(String(page));
+  const pageIsFav = !!file && (file.favoritePages ?? []).includes(String(page));
   const linkedItems = useMemo(() => wbItemsForFile(items, fileId), [items, fileId]);
+  const readSet = useMemo(() => new Set(file?.readPages ?? []), [file]);
+  const favoriteSet = useMemo(() => new Set(file?.favoritePages ?? []), [file]);
+  const annoLiveSet = useMemo(() => {
+    const s = new Set(file?.annoPages ?? []);
+    for (const k of Object.keys(annos)) if (annos[k].length > 0) s.add(k);
+    return s;
+  }, [file, annos]);
+  const currentStrokes = annos[String(page)] ?? [];
 
   const focusHere = !!activeTimer && activeTimer.fileId === fileId;
   const focusTiming = focusHere && activeTimer ? getFocusTiming(activeTimer, now.getTime()) : null;
@@ -134,7 +246,118 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     return { text: `${d}d left`, tone: status === 'soon' ? ('soon' as const) : ('ok' as const) };
   }, [file, fileProgress]);
 
-  /* ---------- reading-time tracking ---------- */
+  /* ---------- page filter + review ---------- */
+  const effectiveFilter: PageFilter = review ? 'favorites' : filter;
+
+  const counts: FilterCounts = useMemo(() => ({
+    all: numPages,
+    read: Math.min(numPages, readSet.size),
+    unread: numPages - Math.min(numPages, readSet.size),
+    favorites: Math.min(numPages, favoriteSet.size),
+    annotated: Math.min(numPages, annoLiveSet.size),
+  }), [numPages, readSet, favoriteSet, annoLiveSet]);
+
+  const pagesList = useMemo(() => {
+    const all = Array.from({ length: numPages }, (_, i) => i + 1);
+    if (effectiveFilter === 'all') return all;
+    return all.filter((n) => {
+      const key = String(n);
+      switch (effectiveFilter) {
+        case 'read': return readSet.has(key);
+        case 'unread': return !readSet.has(key);
+        case 'favorites': return favoriteSet.has(key);
+        case 'annotated': return annoLiveSet.has(key);
+        default: return true;
+      }
+    });
+  }, [numPages, effectiveFilter, readSet, favoriteSet, annoLiveSet]);
+
+  const reviewIndex = review ? pagesList.indexOf(page) + 1 : 0;
+
+  const enterReview = useCallback((f: PageFilter) => {
+    updateReaderPrefs({ viewMode: 'scroll' });
+    setFilter(f);
+    setReview(true);
+    toast('Review mode', `Showing ${filterLabel(f)} pages only — read them like a deck.`);
+  }, [updateReaderPrefs]);
+
+  const exitReview = useCallback(() => {
+    setReview(false);
+    setFilter('all');
+  }, []);
+
+  /* ---------- annotation persistence ---------- */
+
+  const flushSave = useCallback(async () => {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
+    const map = annosRef.current;
+    cacheAnnos(fileId, map);
+    try {
+      await putAnnos(fileId, map);
+    } catch {
+      /* IDB hiccup — next change retries */
+    }
+    setFileAnnoPages(fileId, Object.keys(map).filter((p) => map[p].length > 0));
+    setSaveState('saved');
+  }, [fileId, setFileAnnoPages]);
+
+  const scheduleSave = useCallback(() => {
+    setSaveState('saving');
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => void flushSave(), ANNO_SAVE_DEBOUNCE_MS);
+  }, [flushSave]);
+
+  const commitCommand = useCallback((cmd: AnnoCommand) => {
+    setAnnos((prev) => {
+      const next = applyAnnoCommand(prev, cmd);
+      annosRef.current = next;
+      return next;
+    });
+    undoRef.current.push(cmd);
+    if (undoRef.current.length > UNDO_CAP) undoRef.current.shift();
+    redoRef.current = [];
+    dirtyRef.current = true;
+    forceAnnoTick((t) => t + 1);
+    scheduleSave();
+  }, [scheduleSave]);
+
+  const undo = useCallback(() => {
+    const cmd = undoRef.current.pop();
+    if (!cmd) return;
+    setAnnos((prev) => {
+      const next = revertAnnoCommand(prev, cmd);
+      annosRef.current = next;
+      return next;
+    });
+    redoRef.current.push(cmd);
+    dirtyRef.current = true;
+    forceAnnoTick((t) => t + 1);
+    scheduleSave();
+  }, [scheduleSave]);
+
+  const redo = useCallback(() => {
+    const cmd = redoRef.current.pop();
+    if (!cmd) return;
+    setAnnos((prev) => {
+      const next = applyAnnoCommand(prev, cmd);
+      annosRef.current = next;
+      return next;
+    });
+    undoRef.current.push(cmd);
+    dirtyRef.current = true;
+    forceAnnoTick((t) => t + 1);
+    scheduleSave();
+  }, [scheduleSave]);
+
+  const clearPage = useCallback((pageNum: number) => {
+    const cur = annosRef.current[String(pageNum)] ?? [];
+    if (!cur.length) return;
+    if (!confirm(`Clear all ink on page ${pageNum}?`)) return;
+    commitCommand({ type: 'clear', page: pageNum, strokes: cur });
+  }, [annosRef, commitCommand, confirm]);
+
+  /* ---------- reading-time tracking (v4 logic, kept) ---------- */
 
   const flushPending = useCallback(() => {
     const pending = pendingRef.current;
@@ -177,12 +400,13 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     return () => clearInterval(id);
   }, [flushPending]);
 
-  /* final flush + session log on unmount */
+  /* final flush + session log + annotation save on unmount */
   useEffect(() => {
     const sessionStart = sessionStartRef.current;
     const startPage = startPageRef.current;
     return () => {
       flushPending();
+      void flushSave();
       const elapsed = Date.now() - sessionStart;
       if (elapsed < MIN_SESSION_MS) return;
       logReadingSession({
@@ -197,7 +421,21 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
         endPage: pageRef.current,
       });
     };
-  }, [fileId, flushPending, logReadingSession]);
+  }, [fileId, flushPending, flushSave, logReadingSession]);
+
+  /* save when the tab hides or closes */
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') void flushSave();
+    };
+    const onBeforeUnload = () => void flushSave();
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => {
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+    };
+  }, [flushSave]);
 
   /* lock background scroll while the overlay is up */
   useEffect(() => {
@@ -208,15 +446,28 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     };
   }, []);
 
-  /* ---------- document loading ---------- */
+  /* ---------- load document + annotations ---------- */
 
   useEffect(() => {
     let alive = true;
-    loadFileDoc(fileId)
-      .then((d) => {
+    setLoadState('loading');
+    setDims([]);
+    setDoc(null);
+    loadFileDocSafe(fileId)
+      .then(async (d) => {
         if (!alive) return;
         setDoc(d);
         setLoadState('ready');
+        /* page dimensions for placeholders / aspect math */
+        const count = Math.min(d.numPages, DIMS_FETCH_CAP);
+        const out: { w: number; h: number }[] = [];
+        for (let i = 1; i <= count; i++) {
+          const p = await dimsLimiter(() => d.getPage(i));
+          if (!alive) return;
+          out.push({ w: p.getViewport({ scale: 1 }).width, h: p.getViewport({ scale: 1 }).height });
+        }
+        while (out.length < d.numPages) out.push(out[out.length - 1] ?? { w: 612, h: 792 });
+        if (alive) setDims(out);
       })
       .catch((err: unknown) => {
         if (!alive) return;
@@ -228,20 +479,27 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     };
   }, [fileId]);
 
-  /* base page width (scale 1) for fit-width math */
+  /* annotations: IDB → state (instant when cached) */
   useEffect(() => {
-    if (!doc) return;
     let alive = true;
-    doc
-      .getPage(clampPage(page, doc.numPages))
-      .then((pg) => {
-        if (alive) setBaseW(pg.getViewport({ scale: 1 }).width);
+    setAnnosReady(false);
+    fetchAnnosCached(fileId)
+      .then((map) => {
+        if (!alive) return;
+        annosRef.current = map;
+        setAnnos(map);
+        setAnnosReady(true);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (!alive) return;
+        annosRef.current = {};
+        setAnnos({});
+        setAnnosReady(true);
+      });
     return () => {
       alive = false;
     };
-  }, [doc, page]);
+  }, [fileId]);
 
   /* clamp page if the doc turns out shorter than stored metadata */
   useEffect(() => {
@@ -254,51 +512,83 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     }
   }, [doc, page]);
 
-  /* available stage width (debounced, exact against computed padding) */
+  /* ---------- stage measurement (single stage OR strip scroller) ---------- */
+
   useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
+    const el = viewMode === 'single' ? stageRef.current : stripScrollRef.current;
+    if (!el) return;
     let timer: ReturnType<typeof setTimeout> | null = null;
     const measure = () => {
-      const cs = window.getComputedStyle(stage);
+      const cs = window.getComputedStyle(el);
       const pad = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
-      setStageW(Math.max(0, stage.clientWidth - pad - 12));
+      setStageW(Math.max(0, el.clientWidth - pad - 12));
     };
     const ro = new ResizeObserver(() => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(measure, 140);
     });
-    ro.observe(stage);
+    ro.observe(el);
     measure();
     return () => {
       ro.disconnect();
       if (timer) clearTimeout(timer);
     };
-  }, []);
+  }, [viewMode, loadState, pagesOpen]);
 
-  /* serialized canvas painting — latest request wins, no concurrent renders */
+  /* ---------- dominant page (scroll mode) ---------- */
+
+  const changeDominant = useCallback((next: number) => {
+    if (next === pageRef.current) return;
+    flushPending();
+    visitedRef.current.add(next);
+    pageRef.current = next;
+    pageSecsRef.current = 0;
+    setPage(next);
+    setPageInput(String(next));
+    setFilePosition(fileId, next);
+  }, [fileId, flushPending, setFilePosition]);
+
   useEffect(() => {
-    if (!doc || loadState !== 'ready' || effScale <= 0) return;
-    const seq = ++renderSeqRef.current;
-    const prev = renderChainRef.current;
-    const run = (async () => {
-      await prev;
-      if (seq !== renderSeqRef.current) return;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      setRendering(true);
-      try {
-        await renderPageToCanvas(doc, page, canvas, { scale: effScale });
-        if (seq === renderSeqRef.current) {
-          setRendering(false);
-          setHasPaint(true);
+    if (viewMode !== 'scroll' || loadState !== 'ready') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        let changed = false;
+        for (const en of entries) {
+          const n = Number((en.target as HTMLElement).dataset.page);
+          if (!Number.isFinite(n)) continue;
+          visRatiosRef.current.set(n, en.intersectionRatio);
+          changed = true;
         }
-      } catch {
-        if (seq === renderSeqRef.current) setRendering(false);
-      }
-    })();
-    renderChainRef.current = run.catch(() => {});
-  }, [doc, page, effScale, loadState]);
+        if (!changed) return;
+        let best = -1;
+        let bestR = 0.12;
+        visRatiosRef.current.forEach((r, n) => {
+          if (r > bestR) {
+            bestR = r;
+            best = n;
+          }
+        });
+        if (best > 0) changeDominant(best);
+      },
+      { threshold: [0, 0.1, 0.25, 0.5, 0.75, 1] }
+    );
+    pagesList.forEach((n) => {
+      const el = pageElsRef.current.get(n);
+      if (el) io.observe(el);
+    });
+    return () => io.disconnect();
+  }, [viewMode, loadState, pagesList, changeDominant]);
+
+  /* scroll to the current page after switching into scroll mode */
+  useEffect(() => {
+    if (viewMode !== 'scroll' || loadState !== 'ready' || reviewScrollGuardRef.current) return;
+    reviewScrollGuardRef.current = true;
+    const t = setTimeout(() => {
+      const el = pageElsRef.current.get(pageRef.current);
+      el?.scrollIntoView({ block: 'start' });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [viewMode, loadState]);
 
   /* ---------- navigation ---------- */
 
@@ -306,18 +596,35 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     (next: number) => {
       const total = doc?.numPages ?? file?.pageCount ?? 1;
       const target = clampPage(next, total);
-      if (target !== page) {
+      setPageInput(String(target));
+      if (target === pageRef.current && viewMode === 'scroll') {
+        const el = pageElsRef.current.get(target);
+        el?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      if (viewMode === 'scroll') {
         flushPending();
         visitedRef.current.add(target);
         pageRef.current = target;
         pageSecsRef.current = 0;
         setPage(target);
         setFilePosition(fileId, target);
-        stageRef.current?.scrollTo({ top: 0 });
+        const el = pageElsRef.current.get(target);
+        const dist = Math.abs(target - page);
+        el?.scrollIntoView({ behavior: dist > 5 ? 'auto' : 'smooth', block: 'start' });
+      } else {
+        if (target !== page) {
+          flushPending();
+          visitedRef.current.add(target);
+          pageRef.current = target;
+          pageSecsRef.current = 0;
+          setPage(target);
+          setFilePosition(fileId, target);
+          stageRef.current?.scrollTo({ top: 0 });
+        }
       }
-      setPageInput(String(target));
     },
-    [doc, file, fileId, page, flushPending, setFilePosition]
+    [doc, file, fileId, page, viewMode, flushPending, setFilePosition]
   );
 
   const applyPageInput = useCallback(() => {
@@ -330,47 +637,103 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     onClose();
   }, [onClose]);
 
-  /* ---------- keyboard ---------- */
+  /* ---------- zoom ---------- */
 
+  const baseW = viewMode === 'single'
+    ? (dims[page - 1]?.w || 612)
+    : (dims[0]?.w || 612);
+  const effScale = fit && baseW > 0 && stageW > 0 ? Math.max(0.05, stageW / baseW) : scale;
+  const cssWidth = Math.max(120, Math.round(baseW * effScale));
+
+  const zoomBy = useCallback(
+    (mult: number) => {
+      setScale(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, effScale * mult)));
+      setFit(false);
+    },
+    [effScale]
+  );
+
+  /* ---------- toolbar actions ---------- */
+
+  const setTool = (t: ReaderTool) => updateReaderPrefs({ tool: t });
+  const setViewModePref = (m: ReaderViewMode) => updateReaderPrefs({ viewMode: m });
+
+  /* Open the custom-theme popover as a body portal anchored above the custom
+     button. Computed once on open (viewport-clamped); the toolbar's overflow-x
+     no longer clips it. */
+  const openThemePop = useCallback(() => {
+    const anchor = themeAnchorRef.current;
+    let left = 24;
+    let bottom = 12;
+    if (anchor) {
+      const r = anchor.getBoundingClientRect();
+      left = r.left + r.width / 2 - THEME_POP_W / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - THEME_POP_W - 8));
+      bottom = Math.max(8, window.innerHeight - r.top + 10);
+    }
+    setThemePopPos({ left, bottom });
+    setThemePop(true);
+  }, []);
+
+  const cycleTheme = () => {
+    const next = THEME_ORDER[(THEME_ORDER.indexOf(themeMode) + 1) % THEME_ORDER.length];
+    updateReaderPrefs({ themeMode: next });
+    if (next === 'custom') openThemePop();
+    else if (themePop) setThemePop(false);
+    toast(`Page theme · ${next}`, next === 'custom' ? 'Tune brightness, contrast and warmth in the sliders.' : 'Applied to the page — your ink keeps its colors.');
+  };
+
+  const toggleFavorite = useCallback(() => {
+    toggleFileFavoritePage(fileId, pageRef.current);
+    toast(pageIsFav ? 'Removed from favorites' : 'Page starred', `p.${pageRef.current} ${pageIsFav ? 'unstarred' : 'added to your review deck'}.`);
+  }, [fileId, toggleFileFavoritePage, pageIsFav]);
+
+  const exportPage = useCallback(async () => {
+    if (!doc) return;
+    const pageNum = pageRef.current;
+    try {
+      const canvas = document.createElement('canvas');
+      await renderPageToCanvas(doc, pageNum, canvas, { scale: 2 });
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      const strokes: Stroke[] = annosRef.current[String(pageNum)] ?? [];
+      if (strokes.length) drawStrokes(ctx, strokes, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${file?.title || 'page'} - p${pageNum}.png`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      }, 'image/png');
+      toast('Page exported', `p.${pageNum} saved as PNG with your ink.`);
+    } catch {
+      toast('Export failed', 'The page could not be rendered right now.');
+    }
+  }, [doc, file]);
+
+  /* ---------- focus read ---------- */
+
+  const startFocusRead = () => {
+    if (startFileFocus(fileId)) toast('Focus read started', 'Pomodoro running — page time still counts.');
+    else toast('A timer is already running', 'End it before starting a focus read.');
+  };
+
+  const endFocusRead = () => {
+    stopTimer();
+    toast('Session logged');
+  };
+
+  /* auto-advance the pomodoro while focus-reading here */
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement | null;
-      const inField =
-        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
-      if (e.key === 'Escape') {
-        if (inField) {
-          pageInputRef.current?.blur();
-          setPageInput(String(page));
-          return;
-        }
-        if (document.querySelector('.modal-overlay')) return; // a modal above owns Esc
-        e.preventDefault();
-        if (immersive) {
-          setImmersive(false);
-          setChromeOn(true);
-        } else {
-          closeReader();
-        }
-        return;
-      }
-      if (inField || document.querySelector('.modal-overlay')) return;
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
-        e.preventDefault();
-        goToPage(page - 1);
-      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
-        e.preventDefault();
-        goToPage(page + 1);
-      } else if (e.key === 'Home') {
-        e.preventDefault();
-        goToPage(1);
-      } else if (e.key === 'End') {
-        e.preventDefault();
-        goToPage(numPages);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [page, numPages, goToPage, immersive, closeReader]);
+    if (!focusHere || ftPaused || ftRemaining > 0) return;
+    advancePomodoro();
+    toast(
+      ftPhase === 'Focus' ? 'Break time! ☕' : 'Back to work! 🧠',
+      ftPhase === 'Focus' ? 'Focus phase logged.' : 'Break over — next cycle starts now.'
+    );
+  }, [focusHere, ftPaused, ftRemaining, ftPhase, advancePomodoro]);
 
   /* ---------- immersive chrome ---------- */
 
@@ -406,42 +769,153 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     }
   }, [immersive]);
 
-  /* tap/click on the page reveals chrome while immersive (touch support) */
+  /* close the theme popover on outside clicks (portal lives on body) */
+  useEffect(() => {
+    if (!themePop) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (t && themePopRef.current?.contains(t)) return;
+      if (t && themeAnchorRef.current?.contains(t)) return; /* the button toggles itself */
+      setThemePop(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    return () => document.removeEventListener('pointerdown', onDown, true);
+  }, [themePop]);
+
   const onStageClick = () => {
     if (immersive && !chromeOn) bumpChrome();
   };
 
-  /* ---------- zoom ---------- */
+  /* ---------- keyboard ---------- */
 
-  const zoomBy = useCallback(
-    (mult: number) => {
-      setScale(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, effScale * mult)));
-      setFit(false);
-    },
-    [effScale]
-  );
-
-  /* ---------- focus read ---------- */
-
-  const startFocusRead = () => {
-    if (startFileFocus(fileId)) toast('Focus read started', 'Pomodoro running — page time still counts.');
-    else toast('A timer is already running', 'End it before starting a focus read.');
-  };
-
-  const endFocusRead = () => {
-    stopTimer();
-    toast('Session logged');
-  };
-
-  /* auto-advance the pomodoro while focus-reading here */
   useEffect(() => {
-    if (!focusHere || ftPaused || ftRemaining > 0) return;
-    advancePomodoro();
-    toast(
-      ftPhase === 'Focus' ? 'Break time! ☕' : 'Back to work! 🧠',
-      ftPhase === 'Focus' ? 'Focus phase logged.' : 'Break over — next cycle starts now.'
-    );
-  }, [focusHere, ftPaused, ftRemaining, ftPhase, advancePomodoro]);
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const inField =
+        !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+      if (e.key === 'Escape') {
+        if (inField) {
+          /* a focused slider inside the theme popover — Esc closes the popover */
+          if (themePop && t && themePopRef.current?.contains(t)) {
+            setThemePop(false);
+            return;
+          }
+          setPageInput(String(page));
+          (t as HTMLElement).blur?.();
+          return;
+        }
+        if (document.querySelector('.modal-overlay')) return; // a modal above owns Esc
+        e.preventDefault();
+        if (review) {
+          exitReview();
+          return;
+        }
+        if (themePop) {
+          setThemePop(false);
+          return;
+        }
+        if (pagesOpen) {
+          setPagesOpen(false);
+          return;
+        }
+        if (immersive) {
+          setImmersive(false);
+          setChromeOn(true);
+          return;
+        }
+        closeReader();
+        return;
+      }
+      if (inField || document.querySelector('.modal-overlay')) return;
+
+      const meta = e.ctrlKey || e.metaKey;
+      if (meta && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (meta && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (meta) return;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+        case 'PageUp':
+          e.preventDefault();
+          goToPage(pageRef.current - 1);
+          break;
+        case 'ArrowRight':
+        case 'PageDown':
+          e.preventDefault();
+          goToPage(pageRef.current + 1);
+          break;
+        case 'Home':
+          e.preventDefault();
+          goToPage(1);
+          break;
+        case 'End':
+          e.preventDefault();
+          goToPage(numPages);
+          break;
+        case '+':
+        case '=':
+          e.preventDefault();
+          zoomBy(ZOOM_STEP);
+          break;
+        case '-':
+          e.preventDefault();
+          zoomBy(1 / ZOOM_STEP);
+          break;
+        case '0':
+          e.preventDefault();
+          setFit(true);
+          break;
+        case 'f':
+        case 'F':
+          toggleFavorite();
+          break;
+        case 'p':
+        case 'P':
+          setPagesOpen((v) => !v);
+          break;
+        case 't':
+        case 'T':
+          cycleTheme();
+          break;
+        case 's':
+        case 'S':
+          setViewModePref(viewMode === 'single' ? 'scroll' : 'single');
+          break;
+        case 'v':
+        case 'V':
+          setTool('select');
+          break;
+        case 'd':
+        case 'D':
+          setTool('pen');
+          break;
+        case 'h':
+        case 'H':
+          setTool('highlight');
+          break;
+        case 'e':
+        case 'E':
+          setTool('eraser');
+          break;
+        default:
+          break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [
+    page, numPages, review, themePop, pagesOpen, immersive, closeReader, goToPage, zoomBy,
+    toggleFavorite, undo, redo, themeMode, viewMode, exitReview,
+  ]);
 
   /* ---------- render ---------- */
 
@@ -451,11 +925,43 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     window.dispatchEvent(new CustomEvent('wb-open-item', { detail: itemId }));
   };
 
-  const showSpinner = loadState === 'loading' || (!!file && loadState === 'ready' && !hasPaint);
+  const showSpinner = loadState === 'loading' || (!!file && loadState === 'ready' && dims.length === 0 && viewMode === 'scroll');
+  const drawingTool = tool === 'pen' || tool === 'highlight';
+  const canUndo = undoRef.current.length > 0;
+  const canRedo = redoRef.current.length > 0;
+  const annoCountPages = annoLiveSet.size;
+
+  const cardCommon = {
+    doc: doc as PDFDocumentProxy,
+    themeFilter,
+    pageBg,
+    strokes: [] as Stroke[],
+    tool,
+    penColor: prefs.penColor,
+    penWidth: prefs.penWidth,
+    hlColor: prefs.hlColor,
+    hlWidth: prefs.hlWidth,
+    interactive: annosReady,
+    onCommitStroke: (p: number, s: Stroke) => commitCommand({ type: 'add', page: p, strokes: [s] }),
+    onEraseStrokes: (p: number, ss: Stroke[]) => commitCommand({ type: 'remove', page: p, strokes: ss }),
+    onPointerActivity: bumpChrome,
+    onGoToPage: goToPage,
+    registerEl: (n: number, el: HTMLElement | null) => {
+      if (el) pageElsRef.current.set(n, el);
+      else pageElsRef.current.delete(n);
+    },
+  };
+
+  const themeIcons: Record<ReaderThemeMode, React.ReactNode> = {
+    light: <Sun size={14} />,
+    dark: <Moon size={14} />,
+    warm: <Leaf size={14} />,
+    custom: <SlidersHorizontal size={14} />,
+  };
 
   return createPortal(
     <div
-      className={`reader-overlay${immersive ? ' reader-immersive' : ''}${immersive && chromeOn ? ' rd-chrome-on' : ''}`}
+      className={`reader-overlay${immersive ? ' reader-immersive' : ''}${immersive && chromeOn ? ' rd-chrome-on' : ''}${pagesOpen ? ' rd-pages-open' : ''}`}
       role="dialog"
       aria-modal="true"
       aria-label={`Reading ${file?.title ?? 'PDF'}`}
@@ -486,6 +992,17 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
           </div>
           <div className="rd-progress-meta">
             {readCount}/{numPages} pages read · {fileProgress}%
+            {annoCountPages > 0 && (
+              <span className="rd-annos-chip" title="Pages with your ink">
+                <Pen size={10} aria-hidden /> {annoCountPages}
+              </span>
+            )}
+            {saveState !== 'idle' && (
+              <span className={`rd-save-chip ${saveState}`} title="Annotations are saved automatically">
+                <span className="rd-save-dot" aria-hidden />
+                {saveState === 'saving' ? 'Saving…' : 'Saved'}
+              </span>
+            )}
           </div>
         </div>
 
@@ -559,21 +1076,73 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
 
       {/* ------- page stage ------- */}
       <div className="rd-stage-wrap" onClick={onStageClick}>
-        <div className="rd-stage" ref={stageRef} role="region" aria-label="PDF page view">
-          {file && loadState === 'ready' && (
-            <canvas
-              ref={canvasRef}
-              className="rd-canvas"
-              style={{ visibility: hasPaint ? 'visible' : 'hidden' }}
-              aria-label={`Page ${page} of ${numPages}`}
-            />
-          )}
-        </div>
+        {viewMode === 'single' ? (
+          <div className="rd-stage" ref={stageRef} role="region" aria-label="PDF page view">
+            {file && loadState === 'ready' && doc && (
+              <PdfPageCard
+                {...cardCommon}
+                key={`single-p${page}`}
+                pageNum={page}
+                baseW={baseW}
+                aspect={(dims[page - 1]?.w ?? baseW) / (dims[page - 1]?.h ?? baseW * 1.333)}
+                cssWidth={cssWidth}
+                virtualize={false}
+                showLabel={false}
+                strokes={currentStrokes}
+              />
+            )}
+          </div>
+        ) : (
+          <div className="rd-strip-scroll" ref={stripScrollRef} role="region" aria-label="PDF continuous view">
+            {review && (
+              <div className="rd-review-banner" role="status">
+                <BookmarkCheck size={14} aria-hidden />
+                <span>
+                  Reviewing {pagesList.length} favorite page{pagesList.length === 1 ? '' : 's'}
+                  {reviewIndex > 0 && (
+                    <span className="rd-mono"> · {reviewIndex} of {pagesList.length}</span>
+                  )}
+                </span>
+                <button type="button" onClick={exitReview} className="rd-review-exit">
+                  Exit review
+                </button>
+              </div>
+            )}
+            {!review && effectiveFilter !== 'all' && (
+              <div className="rd-strip-filterbar">
+                <span className="rd-strip-filter-label">
+                  {filterLabel(effectiveFilter)} pages · {pagesList.length} shown
+                </span>
+                <button type="button" className="rd-review-exit" onClick={() => setFilter('all')}>
+                  Show all
+                </button>
+              </div>
+            )}
+            <div className="rd-strip">
+              {loadState === 'ready' && doc && dims.length > 0 && pagesList.map((n) => {
+                const d = dims[n - 1] ?? dims[0] ?? { w: 612, h: 792 };
+                return (
+                  <PdfPageCard
+                    {...cardCommon}
+                    key={`strip-p${n}`}
+                    pageNum={n}
+                    baseW={d.w}
+                    aspect={d.w / d.h}
+                    cssWidth={cssWidth}
+                    virtualize
+                    showLabel
+                    strokes={annos[String(n)] ?? []}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {showSpinner && (
           <div className="rd-centered">
             <div className="rd-spinner" role="status" aria-label="Loading PDF" />
-            <div className="rd-load-label">{loadState === 'loading' ? 'Opening PDF…' : 'Rendering page…'}</div>
+            <div className="rd-load-label">{loadState === 'loading' ? 'Opening PDF…' : 'Measuring pages…'}</div>
           </div>
         )}
 
@@ -603,42 +1172,296 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
           </div>
         )}
 
-        {rendering && hasPaint && (
-          <div className="rd-rendering-chip">
-            <span className="rd-spinner rd-spinner-sm" /> Rendering…
-          </div>
-        )}
-
         {immersive && !chromeOn && (
           <div className="rd-immersive-hint">Immersive reading · move mouse or tap for controls · Esc exits</div>
         )}
       </div>
 
+      {/* ------- pages panel (right slide-over) ------- */}
+      <PagesPanel
+        open={pagesOpen}
+        onClose={() => setPagesOpen(false)}
+        doc={doc}
+        pages={pagesList}
+        aspects={dims.map((d) => d.w / d.h)}
+        currentPage={page}
+        readSet={readSet}
+        favoriteSet={favoriteSet}
+        annos={annos}
+        annoFileSet={new Set(file?.annoPages ?? [])}
+        filter={effectiveFilter}
+        counts={counts}
+        onFilter={(f) => setFilter(f)}
+        onReviewThese={enterReview}
+        onGoToPage={goToPage}
+        onToggleFavorite={(n) => toggleFileFavoritePage(fileId, n)}
+        onToggleRead={(n) => markFilePage(fileId, n, !readSet.has(String(n)))}
+      />
+
       {/* ------- footer toolbar ------- */}
       <footer className="rd-footer">
         <div className="rd-toolbar">
+          {/* view mode */}
+          <div className="rd-group" role="group" aria-label="View mode">
+            <IconBtn
+              title="Single page view (s)"
+              aria-pressed={viewMode === 'single'}
+              className={viewMode === 'single' ? 'rd-on' : ''}
+              onClick={() => setViewModePref('single')}
+            >
+              <FileText size={15} />
+            </IconBtn>
+            <IconBtn
+              title="Continuous reading — scroll through every page (s)"
+              aria-pressed={viewMode === 'scroll'}
+              className={viewMode === 'scroll' ? 'rd-on' : ''}
+              onClick={() => setViewModePref('scroll')}
+            >
+              <ScrollText size={15} />
+            </IconBtn>
+          </div>
+
+          <span className="rd-sep" aria-hidden="true" />
+
+          {/* zoom */}
           <div className="rd-group" role="group" aria-label="Zoom">
-            <IconBtn title="Zoom out" onClick={() => zoomBy(1 / ZOOM_STEP)}>
+            <IconBtn title="Zoom out (−)" onClick={() => zoomBy(1 / ZOOM_STEP)}>
               <ZoomOut size={15} />
             </IconBtn>
             <span className="rd-zoom-label rd-mono">{Math.round(effScale * 100)}%</span>
-            <IconBtn title="Zoom in" onClick={() => zoomBy(ZOOM_STEP)}>
+            <IconBtn title="Zoom in (+)" onClick={() => zoomBy(ZOOM_STEP)}>
               <ZoomIn size={15} />
             </IconBtn>
-            <Btn size="sm" variant={fit ? 'primary' : 'default'} onClick={() => setFit(true)} title="Fit page width">
+            <Btn size="sm" variant={fit ? 'primary' : 'default'} onClick={() => setFit(true)} title="Fit page width (0)">
               <MoveHorizontal size={13} /> Fit
             </Btn>
           </div>
 
           <span className="rd-sep" aria-hidden="true" />
 
+          {/* tools */}
+          <div className="rd-group" role="group" aria-label="Annotation tools">
+            <IconBtn
+              title="Select / navigate — links inside the page are clickable (v)"
+              aria-pressed={tool === 'select'}
+              className={tool === 'select' ? 'rd-on' : ''}
+              onClick={() => setTool('select')}
+            >
+              <MousePointer2 size={15} />
+            </IconBtn>
+            <IconBtn
+              title="Pen — freehand ink (d)"
+              aria-pressed={tool === 'pen'}
+              className={tool === 'pen' ? 'rd-on' : ''}
+              onClick={() => setTool('pen')}
+            >
+              <Pen size={15} />
+            </IconBtn>
+            <IconBtn
+              title="Highlighter — translucent marker (h)"
+              aria-pressed={tool === 'highlight'}
+              className={tool === 'highlight' ? 'rd-on' : ''}
+              onClick={() => setTool('highlight')}
+            >
+              <Highlighter size={15} />
+            </IconBtn>
+            <IconBtn
+              title="Eraser — removes whole strokes (e)"
+              aria-pressed={tool === 'eraser'}
+              className={tool === 'eraser' ? 'rd-on' : ''}
+              onClick={() => setTool('eraser')}
+            >
+              <Eraser size={15} />
+            </IconBtn>
+          </div>
+
+          {/* color + width for the active drawing tool */}
+          {drawingTool && (
+            <div className="rd-group rd-ink-group" role="group" aria-label="Ink color and thickness">
+              <span className="rd-ink-dots">
+                {(tool === 'pen' ? PEN_SWATCHES : HL_SWATCHES).map((c) => {
+                  const active = tool === 'pen' ? prefs.penColor === c : prefs.hlColor === c;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      className={`rd-color-dot${active ? ' on' : ''}`}
+                      style={{ background: c }}
+                      aria-label={`Ink color ${c}`}
+                      aria-pressed={active}
+                      onClick={() =>
+                        updateReaderPrefs(tool === 'pen' ? { penColor: c } : { hlColor: c })
+                      }
+                    />
+                  );
+                })}
+              </span>
+              <input
+                className="rd-width-slider"
+                type="range"
+                min={tool === 'pen' ? 1 : 8}
+                max={tool === 'pen' ? 12 : 48}
+                step={tool === 'pen' ? 1 : 2}
+                value={tool === 'pen' ? prefs.penWidth : prefs.hlWidth}
+                onChange={(e) =>
+                  updateReaderPrefs(
+                    tool === 'pen'
+                      ? { penWidth: Number(e.target.value) }
+                      : { hlWidth: Number(e.target.value) }
+                  )
+                }
+                aria-label={tool === 'pen' ? 'Pen thickness' : 'Highlighter thickness'}
+              />
+              <span className="rd-width-val rd-mono">{tool === 'pen' ? prefs.penWidth : prefs.hlWidth}</span>
+            </div>
+          )}
+
+          <span className="rd-sep" aria-hidden="true" />
+
+          {/* undo / redo / clear */}
+          <div className="rd-group" role="group" aria-label="Undo and redo">
+            <IconBtn title="Undo (Ctrl+Z)" onClick={undo} disabled={!canUndo}>
+              <Undo2 size={15} />
+            </IconBtn>
+            <IconBtn title="Redo (Ctrl+Shift+Z)" onClick={redo} disabled={!canRedo}>
+              <Redo2 size={15} />
+            </IconBtn>
+            <IconBtn title="Clear ink on this page" onClick={() => clearPage(pageRef.current)} disabled={!currentStrokes.length}>
+              <Trash2 size={15} />
+            </IconBtn>
+          </div>
+
+          <span className="rd-sep" aria-hidden="true" />
+
+          {/* page theme */}
+          <div className="rd-group rd-theme-group" role="group" aria-label="Page theme">
+            {THEME_ORDER.filter((m) => m !== 'custom').map((m) => (
+              <IconBtn
+                key={m}
+                title={`Page theme · ${m} (T cycles)`}
+                aria-pressed={themeMode === m}
+                className={`rd-theme-btn${themeMode === m ? ' rd-on' : ''}`}
+                onClick={() => {
+                  updateReaderPrefs({ themeMode: m });
+                  if (themePop) setThemePop(false);
+                }}
+              >
+                {themeIcons[m]}
+              </IconBtn>
+            ))}
+            <span className="rd-theme-anchor" ref={themeAnchorRef}>
+              <IconBtn
+                title="Page theme · custom — tune brightness, contrast and warmth with sliders"
+                aria-pressed={themeMode === 'custom'}
+                aria-haspopup="dialog"
+                aria-expanded={themePop}
+                className={`rd-theme-btn rd-theme-btn-custom${themeMode === 'custom' ? ' rd-on' : ''}`}
+                onClick={() => {
+                  updateReaderPrefs({ themeMode: 'custom' });
+                  if (themePop) setThemePop(false);
+                  else openThemePop();
+                }}
+              >
+                {themeIcons.custom}
+              </IconBtn>
+            </span>
+            {themeMode === 'custom' && (
+              <span
+                className="rd-theme-live rd-mono"
+                title={`Custom page theme — brightness ${prefs.custom.brightness}, contrast ${prefs.custom.contrast}, warmth ${prefs.custom.sepia}`}
+              >
+                b {prefs.custom.brightness} · c {prefs.custom.contrast} · w {prefs.custom.sepia}
+              </span>
+            )}
+          </div>
+
+          {/* custom theme popover — portal to body so the toolbar's overflow
+              never clips or scrolls it away; fixed position computed on open */}
+          {themePop && themePopPos && createPortal(
+            <div
+              ref={themePopRef}
+              className="rd-theme-pop"
+              role="dialog"
+              aria-label="Custom page theme"
+              style={{ position: 'fixed', left: themePopPos.left, bottom: themePopPos.bottom }}
+            >
+              <div className="rd-theme-pop-title">Custom page look</div>
+              <div className="rd-theme-presets" role="group" aria-label="Custom theme presets">
+                {THEME_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="rd-theme-preset"
+                    onClick={() => updateReaderPrefs({ themeMode: 'custom', custom: { ...p.values } })}
+                    title={`Brightness ${p.values.brightness} · contrast ${p.values.contrast} · warmth ${p.values.sepia}`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              {(['brightness', 'contrast', 'sepia'] as const).map((k) => (
+                <label key={k} className="rd-theme-row">
+                  <span>{k === 'sepia' ? 'warmth' : k}</span>
+                  <input
+                    type="range"
+                    min={k === 'sepia' ? 0 : 50}
+                    max={k === 'sepia' ? 80 : 150}
+                    value={prefs.custom[k]}
+                    onChange={(e) =>
+                      updateReaderPrefs({ custom: { ...prefs.custom, [k]: Number(e.target.value) } })
+                    }
+                    aria-label={`${k} for custom page theme`}
+                  />
+                  <span className="rd-mono rd-theme-val">{prefs.custom[k]}</span>
+                </label>
+              ))}
+              <div className="rd-theme-hint">Sliders apply live · T cycles themes · Esc closes</div>
+            </div>,
+            document.body
+          )}
+
+          <span className="rd-sep" aria-hidden="true" />
+
+          {/* favorites + review + pages + export */}
+          <div className="rd-group" role="group" aria-label="Page actions">
+            <Btn
+              size="sm"
+              variant={pageIsFav ? 'primary' : 'default'}
+              onClick={toggleFavorite}
+              title={pageIsFav ? 'Remove this page from favorites (f)' : 'Star this page for review (f)'}
+            >
+              <Star size={13} /> {pageIsFav ? 'Starred' : 'Star'}
+            </Btn>
+            <Btn
+              size="sm"
+              variant={review ? 'primary' : 'default'}
+              onClick={() => (review ? exitReview() : enterReview('favorites'))}
+              title="Review your starred pages like a deck — great at the end of the day"
+            >
+              <BookmarkCheck size={13} /> {review ? 'Exit review' : 'Review'}
+            </Btn>
+            <IconBtn
+              title="Pages panel — thumbnails and filters (p)"
+              aria-pressed={pagesOpen}
+              className={pagesOpen ? 'rd-on' : ''}
+              onClick={() => setPagesOpen((v) => !v)}
+            >
+              <LayoutGrid size={15} />
+            </IconBtn>
+            <IconBtn title="Export this page as PNG (with ink)" onClick={() => void exportPage()}>
+              <Download size={15} />
+            </IconBtn>
+          </div>
+
+          <span className="rd-sep" aria-hidden="true" />
+
+          {/* page nav */}
           <div className="rd-group" role="group" aria-label="Page navigation">
             <IconBtn title="Previous page (←)" onClick={() => goToPage(page - 1)} disabled={page <= 1}>
               <ChevronLeft size={15} />
             </IconBtn>
             <span className="rd-page-box">
               <input
-                ref={pageInputRef}
                 className="rd-page-input"
                 type="text"
                 inputMode="numeric"
@@ -649,7 +1472,7 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
                   if (e.key === 'Enter') {
                     e.preventDefault();
                     applyPageInput();
-                    pageInputRef.current?.blur();
+                    (e.target as HTMLInputElement).blur();
                   }
                 }}
               />
@@ -692,4 +1515,11 @@ export function ReaderOverlay({ fileId, onClose }: { fileId: string; onClose: ()
     </div>,
     document.body
   );
+}
+
+/* pdf.js doc loader with the module-level cache from lib (kept separate so the
+   overlay never imports the worker bundle synchronously). */
+async function loadFileDocSafe(fileId: string): Promise<PDFDocumentProxy> {
+  const { loadFileDoc } = await import('@/lib/workbench/pdf');
+  return loadFileDoc(fileId);
 }

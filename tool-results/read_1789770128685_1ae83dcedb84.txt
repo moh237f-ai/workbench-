@@ -1,0 +1,1105 @@
+     1→/* ==================== Workbench Aurora — Roadmaps View ====================
+     2→   Screen 1: roadmap list (cards + progress rings, kind chips, inline rename,
+     3→             duplicate, delete, template picker)
+     4→   Screen 2: workspace (toolbar + live stats bar + RoadmapCanvas ↔
+     5→             RoadmapTimeline + execution order panel with scheduling) */
+     6→
+     7→'use client';
+     8→
+     9→import React, { useEffect, useMemo, useRef, useState } from 'react';
+    10→import {
+    11→  AlignJustify, ArrowLeft, CalendarPlus, CalendarRange, ChevronLeft, Copy, ExternalLink,
+    12→  FilePlus2, GraduationCap, LayoutGrid, Layers, Link2, ListOrdered, LucideIcon,
+    13→  Maximize2, Network, Plus, Rocket, Search, Sparkles, Trash2, X, ZoomIn, ZoomOut,
+    14→} from 'lucide-react';
+    15→import { useWB } from '@/lib/workbench/store';
+    16→import {
+    17→  addDaysStr, dateTimeFromMin, fmtDuration, minToHHMM, todayStr,
+    18→} from '@/lib/workbench/helpers';
+    19→import type { Roadmap, RoadmapNode, RoadmapNodeKind } from '@/lib/workbench/types';
+    20→import { Btn, IconBtn, Seg, toast } from '../ui/primitives';
+    21→import RoadmapCanvas, {
+    22→  RM_KIND_ICON, RM_KIND_META, nodeLive, topoOrder,
+    23→  type RmNodeLive, type RmSelection, type RoadmapCanvasHandle,
+    24→} from './RoadmapCanvas';
+    25→import RoadmapTimeline, { type RoadmapTimelineHandle } from './RoadmapTimeline';
+    26→import {
+    27→  computeOrder, findFreeSlot, nextUpRow, roadmapProgress, type OrderRow,
+    28→} from './roadmapOrder';
+    29→import './roadmap.css';
+    30→
+    31→/* ---------- roadmap templates ---------- */
+    32→
+    33→interface RmTemplate {
+    34→  id: string;
+    35→  label: string;
+    36→  desc: string;
+    37→  Icon: LucideIcon;
+    38→  title: string;
+    39→  milestones: { label: string; weeks: number }[];
+    40→  note: string | null;
+    41→}
+    42→
+    43→const RM_TEMPLATES: RmTemplate[] = [
+    44→  {
+    45→    id: 'blank', label: 'Blank', Icon: FilePlus2,
+    46→    desc: 'An empty canvas — build it your way.',
+    47→    title: 'Untitled roadmap', milestones: [], note: null,
+    48→  },
+    49→  {
+    50→    id: 'exam', label: 'Exam prep', Icon: GraduationCap,
+    51→    desc: 'Syllabus, past papers, exam day — three milestones over six weeks.',
+    52→    title: 'Exam prep',
+    53→    milestones: [
+    54→      { label: 'Syllabus covered', weeks: 2 },
+    55→      { label: 'Past papers done', weeks: 4 },
+    56→      { label: 'Exam day', weeks: 6 },
+    57→    ],
+    58→    note: 'Add your course files and link them',
+    59→  },
+    60→  {
+    61→    id: 'skill', label: 'Learn a skill', Icon: Sparkles,
+    62→    desc: 'Fundamentals to first project to comfort, over three months.',
+    63→    title: 'Learn a skill',
+    64→    milestones: [
+    65→      { label: 'Fundamentals', weeks: 3 },
+    66→      { label: 'First project shipped', weeks: 7 },
+    67→      { label: 'Comfortable', weeks: 12 },
+    68→    ],
+    69→    note: 'Break each milestone into tasks',
+    70→  },
+    71→  {
+    72→    id: 'ship', label: 'Ship a project', Icon: Rocket,
+    73→    desc: 'Scope, MVP, launch — five weeks from idea to shipped.',
+    74→    title: 'Ship a project',
+    75→    milestones: [
+    76→      { label: 'Scope locked', weeks: 1 },
+    77→      { label: 'MVP done', weeks: 3 },
+    78→      { label: 'Launch', weeks: 5 },
+    79→    ],
+    80→    note: 'Cut scope, not quality',
+    81→  },
+    82→];
+    83→
+    84→/* ---------- header actions (new roadmap + template picker) ---------- */
+    85→
+    86→export function RoadmapHeaderActions() {
+    87→  const createRoadmap = useWB((s) => s.createRoadmap);
+    88→  const addRoadmapNode = useWB((s) => s.addRoadmapNode);
+    89→  const addRoadmapEdge = useWB((s) => s.addRoadmapEdge);
+    90→  const [open, setOpen] = useState(false);
+    91→
+    92→  useEffect(() => {
+    93→    if (!open) return;
+    94→    const onKey = (e: KeyboardEvent) => {
+    95→      if (e.key === 'Escape') setOpen(false);
+    96→    };
+    97→    window.addEventListener('keydown', onKey);
+    98→    return () => window.removeEventListener('keydown', onKey);
+    99→  }, [open]);
+   100→
+   101→  const createFrom = (t: RmTemplate) => {
+   102→    const rm = createRoadmap(t.title);
+   103→    const ms = t.milestones.map((m, i) =>
+   104→      addRoadmapNode(rm.id, {
+   105→        kind: 'milestone',
+   106→        refId: null,
+   107→        label: m.label,
+   108→        x: 60 + i * 300,
+   109→        y: 60,
+   110→        milestoneDate: addDaysStr(todayStr(), m.weeks * 7),
+   111→        note: '',
+   112→        done: false,
+   113→      })
+   114→    );
+   115→    for (let i = 1; i < ms.length; i++) addRoadmapEdge(rm.id, ms[i - 1].id, ms[i].id);
+   116→    if (t.note) {
+   117→      addRoadmapNode(rm.id, {
+   118→        kind: 'note',
+   119→        refId: null,
+   120→        label: t.note,
+   121→        x: 60,
+   122→        y: 250,
+   123→        milestoneDate: null,
+   124→        note: t.note,
+   125→        done: false,
+   126→      });
+   127→    }
+   128→    setOpen(false);
+   129→    toast(
+   130→      'Roadmap created',
+   131→      t.milestones.length
+   132→        ? `${t.milestones.length} milestones dated and chained — add your goals and tasks.`
+   133→        : 'Add goals, tasks and files, then connect them.'
+   134→    );
+   135→  };
+   136→
+   137→  return (
+   138→    <div className="rm-pop-wrap">
+   139→      <Btn
+   140→        size="sm"
+   141→        variant="primary"
+   142→        onClick={() => setOpen((v) => !v)}
+   143→        title="Create a roadmap — blank or from a template"
+   144→        aria-expanded={open}
+   145→      >
+   146→        <Plus size={14} /> New roadmap
+   147→      </Btn>
+   148→      {open && (
+   149→        <div className="rm-pop rm-template-pop" role="dialog" aria-label="Start a new roadmap">
+   150→          <div className="rm-pop-head">
+   151→            <span className="rm-pop-head-title">Start a roadmap</span>
+   152→          </div>
+   153→          {RM_TEMPLATES.map((t) => (
+   154→            <button key={t.id} type="button" className="rm-tpl-row" onClick={() => createFrom(t)}>
+   155→              <span className="rm-tpl-row-head">
+   156→                <t.Icon /> {t.label}
+   157→              </span>
+   158→              <span className="rm-tpl-row-desc">{t.desc}</span>
+   159→            </button>
+   160→          ))}
+   161→        </div>
+   162→      )}
+   163→    </div>
+   164→  );
+   165→}
+   166→
+   167→/* ---------- list screen helpers ---------- */
+   168→
+   169→const KIND_ORDER: RoadmapNodeKind[] = ['goal', 'task', 'file', 'milestone', 'note'];
+   170→const KIND_PLURAL: Record<RoadmapNodeKind, string> = {
+   171→  goal: 'goals', task: 'tasks', file: 'files', milestone: 'milestones', note: 'notes',
+   172→};
+   173→
+   174→function Ring({ pct }: { pct: number }) {
+   175→  const r = 15.5;
+   176→  const c = 2 * Math.PI * r;
+   177→  return (
+   178→    <div className="rm-ring" aria-hidden="true">
+   179→      <svg viewBox="0 0 38 38" width={38} height={38}>
+   180→        <circle className="rm-ring-track" cx={19} cy={19} r={r} />
+   181→        <circle
+   182→          className="rm-ring-val"
+   183→          cx={19} cy={19} r={r}
+   184→          strokeDasharray={`${(c * pct) / 100} ${c}`}
+   185→          transform="rotate(-90 19 19)"
+   186→        />
+   187→      </svg>
+   188→      <span className="rm-ring-pct mono">{pct}%</span>
+   189→    </div>
+   190→  );
+   191→}
+   192→
+   193→/* ---------- main view ---------- */
+   194→
+   195→export function RoadmapView() {
+   196→  const roadmaps = useWB((s) => s.roadmaps);
+   197→  const activeId = useWB((s) => s.activeRoadmapId);
+   198→  const active = roadmaps.find((r) => r.id === activeId) || null;
+   199→
+   200→  if (!active) return <RoadmapList />;
+   201→  return <RoadmapWorkspace roadmap={active} />;
+   202→}
+   203→
+   204→/* ---------- screen 1: list ---------- */
+   205→
+   206→function RoadmapList() {
+   207→  const roadmaps = useWB((s) => s.roadmaps);
+   208→  const items = useWB((s) => s.items);
+   209→  const files = useWB((s) => s.files);
+   210→  const setActiveRoadmap = useWB((s) => s.setActiveRoadmap);
+   211→  const deleteRoadmap = useWB((s) => s.deleteRoadmap);
+   212→  const duplicateRoadmap = useWB((s) => s.duplicateRoadmap);
+   213→  const updateRoadmap = useWB((s) => s.updateRoadmap);
+   214→  const [renaming, setRenaming] = useState<string | null>(null);
+   215→  const [draft, setDraft] = useState('');
+   216→
+   217→  const liveMaps = useMemo(() => {
+   218→    return roadmaps.map((rm) => {
+   219→      const m = new Map<string, RmNodeLive>();
+   220→      rm.nodes.forEach((n) => m.set(n.id, nodeLive(n, items, files)));
+   221→      return m;
+   222→    });
+   223→  }, [roadmaps, items, files]);
+   224→
+   225→  if (!roadmaps.length) {
+   226→    return (
+   227→      <div className="empty-state fade-in">
+   228→        <div className="es-title">Design your first roadmap</div>
+   229→        A roadmap is a living canvas: drop your goals, tasks and PDF files onto it, draw the
+   230→        connections between them, and watch the order, the time and the progress come alive.
+   231→        <p className="rm-empty-templates">Start from a template — exam prep, learning a skill or shipping a project.</p>
+   232→        <div style={{ marginTop: 12 }}>
+   233→          <RoadmapHeaderActions />
+   234→        </div>
+   235→      </div>
+   236→    );
+   237→  }
+   238→
+   239→  return (
+   240→    <div className="rm-screen fade-in">
+   241→      <div className="rm-list-head">
+   242→        <span className="rm-list-count">
+   243→          {roadmaps.length} roadmap{roadmaps.length === 1 ? '' : 's'}
+   244→        </span>
+   245→        <RoadmapHeaderActions />
+   246→      </div>
+   247→      <div className="rm-list-grid">
+   248→        {roadmaps.map((rm, i) => {
+   249→          const pct = roadmapProgress(rm, liveMaps[i]);
+   250→          const updated = rm.updatedAt.slice(0, 10);
+   251→          return (
+   252→            <div
+   253→              key={rm.id}
+   254→              className="rm-card"
+   255→              role="button"
+   256→              tabIndex={0}
+   257→              onClick={() => renaming === rm.id ? undefined : setActiveRoadmap(rm.id)}
+   258→              onKeyDown={(e) => {
+   259→                if (e.key === 'Enter' && renaming !== rm.id) setActiveRoadmap(rm.id);
+   260→              }}
+   261→              aria-label={`Open roadmap ${rm.title}`}
+   262→            >
+   263→              <div className="rm-card-del rm-card-actions">
+   264→                <IconBtn
+   265→                  small
+   266→                  title="Duplicate roadmap"
+   267→                  onClick={(e) => {
+   268→                    e.stopPropagation();
+   269→                    const copy = duplicateRoadmap(rm.id);
+   270→                    if (copy) toast('Roadmap duplicated', copy.title);
+   271→                  }}
+   272→                >
+   273→                  <Copy size={14} />
+   274→                </IconBtn>
+   275→                <IconBtn
+   276→                  danger
+   277→                  small
+   278→                  title="Delete roadmap"
+   279→                  onClick={(e) => {
+   280→                    e.stopPropagation();
+   281→                    if (confirm(`Delete roadmap "${rm.title}"?`)) {
+   282→                      deleteRoadmap(rm.id);
+   283→                      toast('Roadmap deleted', rm.title);
+   284→                    }
+   285→                  }}
+   286→                >
+   287→                  <Trash2 size={14} />
+   288→                </IconBtn>
+   289→              </div>
+   290→              {renaming === rm.id ? (
+   291→                <input
+   292→                  className="rm-rename"
+   293→                  autoFocus
+   294→                  value={draft}
+   295→                  onChange={(e) => setDraft(e.target.value)}
+   296→                  onClick={(e) => e.stopPropagation()}
+   297→                  onBlur={() => {
+   298→                    const t = draft.trim();
+   299→                    if (t && t !== rm.title) updateRoadmap(rm.id, { title: t });
+   300→                    setRenaming(null);
+   301→                  }}
+   302→                  onKeyDown={(e) => {
+   303→                    if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+   304→                    if (e.key === 'Escape') setRenaming(null);
+   305→                  }}
+   306→                />
+   307→              ) : (
+   308→                <h3
+   309→                  className="rm-card-title"
+   310→                  title={`${rm.title} — double-click to rename`}
+   311→                  onDoubleClick={(e) => {
+   312→                    e.stopPropagation();
+   313→                    setDraft(rm.title);
+   314→                    setRenaming(rm.id);
+   315→                  }}
+   316→                >
+   317→                  {rm.title}
+   318→                </h3>
+   319→              )}
+   320→              <p className="rm-card-desc">{rm.description || 'No description yet.'}</p>
+   321→              <div className="rm-card-kinds">
+   322→                {KIND_ORDER.map((k) => {
+   323→                  const n = rm.nodes.filter((nd) => nd.kind === k).length;
+   324→                  if (!n) return null;
+   325→                  const Icon = RM_KIND_ICON[k];
+   326→                  return (
+   327→                    <span key={k} className="rm-kind-chip" title={`${n} ${KIND_PLURAL[k]}`}>
+   328→                      <Icon /> <span className="mono">{n}</span>
+   329→                    </span>
+   330→                  );
+   331→                })}
+   332→              </div>
+   333→              <div className="rm-card-meta">
+   334→                <Ring pct={pct} />
+   335→                <span className="rm-card-stats">
+   336→                  {rm.nodes.length} node{rm.nodes.length === 1 ? '' : 's'} · {rm.edges.length} link{rm.edges.length === 1 ? '' : 's'}
+   337→                </span>
+   338→                <span className="rm-card-date mono">{updated}</span>
+   339→              </div>
+   340→            </div>
+   341→          );
+   342→        })}
+   343→      </div>
+   344→    </div>
+   345→  );
+   346→}
+   347→
+   348→/* ---------- screen 2: workspace ---------- */
+   349→
+   350→type PopState =
+   351→  | { mode: 'menu' }
+   352→  | { mode: 'pick'; kind: 'goal' | 'task' | 'file' }
+   353→  | { mode: 'milestone' }
+   354→  | { mode: 'note' }
+   355→  | null;
+   356→
+   357→type ViewMode = 'canvas' | 'timeline';
+   358→
+   359→function RoadmapWorkspace({ roadmap }: { roadmap: Roadmap }) {
+   360→  const items = useWB((s) => s.items);
+   361→  const files = useWB((s) => s.files);
+   362→  const filePlans = useWB((s) => s.filePlans);
+   363→  const updateRoadmap = useWB((s) => s.updateRoadmap);
+   364→  const updateRoadmapNode = useWB((s) => s.updateRoadmapNode);
+   365→  const removeRoadmapNode = useWB((s) => s.removeRoadmapNode);
+   366→  const addRoadmapNode = useWB((s) => s.addRoadmapNode);
+   367→  const addRoadmapEdge = useWB((s) => s.addRoadmapEdge);
+   368→  const removeRoadmapEdge = useWB((s) => s.removeRoadmapEdge);
+   369→  const updateRoadmapEdge = useWB((s) => s.updateRoadmapEdge);
+   370→  const setActiveRoadmap = useWB((s) => s.setActiveRoadmap);
+   371→  const updateItem = useWB((s) => s.updateItem);
+   372→  const addFilePlan = useWB((s) => s.addFilePlan);
+   373→
+   374→  const canvasRef = useRef<RoadmapCanvasHandle>(null);
+   375→  const timelineRef = useRef<RoadmapTimelineHandle>(null);
+   376→  const [viewMode, setViewMode] = useState<ViewMode>('canvas');
+   377→  const [selection, setSelection] = useState<RmSelection | null>(null);
+   378→  const [linkMode, setLinkMode] = useState(false);
+   379→  const [linkSource, setLinkSource] = useState<string | null>(null);
+   380→  const [orderOpen, setOrderOpen] = useState(false);
+   381→  const [pop, setPop] = useState<PopState>(null);
+   382→  const [popSearch, setPopSearch] = useState('');
+   383→  const [layoutPop, setLayoutPop] = useState(false);
+   384→  const [zoom, setZoom] = useState(1);
+   385→  const [fitKey, setFitKey] = useState(0);
+   386→
+   387→  const liveMap = useMemo(() => {
+   388→    const m = new Map<string, RmNodeLive>();
+   389→    roadmap.nodes.forEach((n) => m.set(n.id, nodeLive(n, items, files)));
+   390→    return m;
+   391→  }, [roadmap.nodes, items, files]);
+   392→
+   393→  const selectedNode =
+   394→    selection?.kind === 'node' ? roadmap.nodes.find((n) => n.id === selection.id) || null : null;
+   395→  const selectedEdge =
+   396→    selection?.kind === 'edge' ? roadmap.edges.find((e) => e.id === selection.id) || null : null;
+   397→
+   398→  /* ---------- derived stats (shared by stats bar + order panel) ---------- */
+   399→
+   400→  const orderRows = useMemo(() => computeOrder(roadmap, liveMap), [roadmap, liveMap]);
+   401→  const progress = useMemo(() => roadmapProgress(roadmap, liveMap), [roadmap, liveMap]);
+   402→  const nextUp = useMemo(() => nextUpRow(orderRows.rows), [orderRows]);
+   403→
+   404→  /* keyboard: Esc closes pops / cancels link / clears selection; Delete removes */
+   405→  useEffect(() => {
+   406→    const onKey = (e: KeyboardEvent) => {
+   407→      const t = e.target as HTMLElement;
+   408→      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(t?.tagName) || t?.isContentEditable) return;
+   409→      if (e.key === 'Escape') {
+   410→        if (pop) setPop(null);
+   411→        else if (layoutPop) setLayoutPop(false);
+   412→        else if (linkSource) setLinkSource(null);
+   413→        else if (selection) setSelection(null);
+   414→        return;
+   415→      }
+   416→      if ((e.key === 'Delete' || e.key === 'Backspace') && selection) {
+   417→        e.preventDefault();
+   418→        if (selection.kind === 'node') {
+   419→          removeRoadmapNode(roadmap.id, selection.id);
+   420→          toast('Node removed');
+   421→        } else {
+   422→          removeRoadmapEdge(roadmap.id, selection.id);
+   423→          toast('Link removed');
+   424→        }
+   425→        setSelection(null);
+   426→      }
+   427→    };
+   428→    window.addEventListener('keydown', onKey);
+   429→    return () => window.removeEventListener('keydown', onKey);
+   430→  }, [pop, layoutPop, linkSource, selection, roadmap.id, removeRoadmapNode, removeRoadmapEdge]);
+   431→
+   432→  /* ---------- focus a node in whichever view is active ---------- */
+   433→
+   434→  const focusNode = (id: string) => {
+   435→    setSelection({ kind: 'node', id });
+   436→    if (viewMode === 'canvas') canvasRef.current?.centerNode(id);
+   437→    else timelineRef.current?.scrollToNode(id);
+   438→  };
+   439→
+   440→  /* ---------- node creation ---------- */
+   441→
+   442→  const spawn = (partial: Omit<RoadmapNode, 'id'>) => {
+   443→    const spot = canvasRef.current?.dropSpot() ?? { x: 80, y: 80 };
+   444→    const node = addRoadmapNode(roadmap.id, { ...partial, x: spot.x, y: spot.y });
+   445→    setPop(null);
+   446→    setPopSearch('');
+   447→    setSelection({ kind: 'node', id: node.id });
+   448→    return node;
+   449→  };
+   450→
+   451→  const pickList = useMemo(() => {
+   452→    if (!pop || pop.mode !== 'pick') return [] as { id: string; title: string; meta: string[] }[];
+   453→    const q = popSearch.trim().toLowerCase();
+   454→    if (pop.kind === 'file') {
+   455→      return files
+   456→        .filter((f) => !f.archived)
+   457→        .filter((f) => !q || f.title.toLowerCase().includes(q) || f.fileName.toLowerCase().includes(q))
+   458→        .slice(0, 40)
+   459→        .map((f) => ({
+   460→          id: f.id,
+   461→          title: f.title,
+   462→          meta: [`${f.pageCount} pages`, f.deadline ? `due ${f.deadline.slice(5)}` : 'no deadline'],
+   463→        }));
+   464→    }
+   465→    return items
+   466→      .filter((i) => i.type === pop.kind)
+   467→      .filter((i) => !['archived'].includes(i.status))
+   468→      .filter((i) => !q || i.title.toLowerCase().includes(q))
+   469→      .sort((a, b) => (a.status === 'done' ? 1 : 0) - (b.status === 'done' ? 1 : 0))
+   470→      .slice(0, 40)
+   471→      .map((i) => ({
+   472→        id: i.id,
+   473→        title: i.title,
+   474→        meta: [
+   475→          i.status.replace('_', ' '),
+   476→          i.deadline ? `due ${i.deadline.slice(5)}` : 'no deadline',
+   477→          i.estimateMin ? `${i.estimateMin}m` : '',
+   478→        ].filter(Boolean),
+   479→      }));
+   480→  }, [pop, popSearch, items, files]);
+   481→
+   482→  /* ---------- auto layout (two strategies) ---------- */
+   483→
+   484→  const layoutByLayers = () => {
+   485→    const order = topoOrder(roadmap.nodes, roadmap.edges);
+   486→    const depth = new Map<string, number>();
+   487→    roadmap.nodes.forEach((n) => depth.set(n.id, 0));
+   488→    order.forEach((id) => {
+   489→      roadmap.edges.forEach((e) => {
+   490→        if (e.from !== id) return;
+   491→        depth.set(e.to, Math.max(depth.get(e.to) ?? 0, (depth.get(id) ?? 0) + 1));
+   492→      });
+   493→    });
+   494→    const layers = new Map<number, RoadmapNode[]>();
+   495→    roadmap.nodes.forEach((n) => {
+   496→      const d = depth.get(n.id) ?? 0;
+   497→      const arr = layers.get(d) || [];
+   498→      arr.push(n);
+   499→      layers.set(d, arr);
+   500→    });
+   501→    layers.forEach((arr, d) => {
+   502→      arr.sort((a, b) => a.y - b.y);
+   503→      arr.forEach((n, i) => updateRoadmapNode(roadmap.id, n.id, { x: 60 + d * 290, y: 60 + i * 150 }));
+   504→    });
+   505→    setFitKey((k) => k + 1);
+   506→    toast('Auto-layout applied', 'Layers follow your connections.');
+   507→  };
+   508→
+   509→  const layoutByKind = () => {
+   510→    KIND_ORDER.forEach((k, row) => {
+   511→      const arr = roadmap.nodes.filter((n) => n.kind === k).sort((a, b) => a.y - b.y);
+   512→      arr.forEach((n, i) => updateRoadmapNode(roadmap.id, n.id, { x: 60 + i * 290, y: 60 + row * 150 }));
+   513→    });
+   514→    setFitKey((k) => k + 1);
+   515→    toast('Auto-layout applied', 'Swimlanes group nodes by kind.');
+   516→  };
+   517→
+   518→  /* ---------- schedule a row onto tomorrow's planner ---------- */
+   519→
+   520→  const scheduleRow = (r: OrderRow) => {
+   521→    const node = r.node;
+   522→    if (node.kind === 'milestone' || node.kind === 'note' || !node.refId) {
+   523→      toast("Milestones aren't schedulable — link a task first.");
+   524→      return;
+   525→    }
+   526→    const tomorrow = addDaysStr(todayStr(), 1);
+   527→    const title = r.live?.title || node.label || 'Untitled';
+   528→    if (node.kind === 'file') {
+   529→      const f = files.find((x) => x.id === node.refId);
+   530→      if (!f) {
+   531→        toast('Linked file is missing');
+   532→        return;
+   533→      }
+   534→      const slot = findFreeSlot(items, filePlans, tomorrow);
+   535→      if (slot === null) {
+   536→        toast('No free slot tomorrow', 'The 09:00–21:00 window is fully booked.');
+   537→        return;
+   538→      }
+   539→      addFilePlan(f.id, tomorrow, slot, 30);
+   540→      toast(`Scheduled ${title} tomorrow at ${minToHHMM(slot)}`);
+   541→      return;
+   542→    }
+   543→    const item = items.find((i) => i.id === node.refId);
+   544→    if (!item) {
+   545→      toast('Linked item is missing');
+   546→      return;
+   547→    }
+   548→    const slot = findFreeSlot(items, filePlans, tomorrow);
+   549→    if (slot === null) {
+   550→      toast('No free slot tomorrow', 'The 09:00–21:00 window is fully booked.');
+   551→      return;
+   552→    }
+   553→    updateItem(
+   554→      item.id,
+   555→      {
+   556→        plannedStart: dateTimeFromMin(tomorrow, slot),
+   557→        plannedEnd: dateTimeFromMin(tomorrow, slot + 30),
+   558→        startDate: tomorrow,
+   559→      },
+   560→      { snapshot: true }
+   561→    );
+   562→    toast(`Scheduled ${title} tomorrow at ${minToHHMM(slot)}`);
+   563→  };
+   564→
+   565→  /* ---------- render ---------- */
+   566→
+   567→  return (
+   568→    <div className="rm-screen fade-in">
+   569→      <div className="rm-toolbar">
+   570→        <Btn size="sm" onClick={() => setActiveRoadmap(null)} title="Back to all roadmaps">
+   571→          <ChevronLeft size={14} /> Roadmaps
+   572→        </Btn>
+   573→        <div className="rm-toolbar-sep" />
+   574→        <div className="rm-toolbar-titles">
+   575→          <input
+   576→            className="rm-title-input"
+   577→            value={roadmap.title}
+   578→            aria-label="Roadmap title"
+   579→            onChange={(e) => updateRoadmap(roadmap.id, { title: e.target.value })}
+   580→          />
+   581→          <input
+   582→            className="rm-desc-input"
+   583→            value={roadmap.description}
+   584→            placeholder="Add a short description…"
+   585→            aria-label="Roadmap description"
+   586→            onChange={(e) => updateRoadmap(roadmap.id, { description: e.target.value })}
+   587→          />
+   588→        </div>
+   589→
+   590→        {/* view mode: canvas ↔ timeline */}
+   591→        <Seg<ViewMode>
+   592→          className="rm-viewseg"
+   593→          options={[
+   594→            { id: 'canvas', label: 'Canvas', icon: <Network size={13} /> },
+   595→            { id: 'timeline', label: 'Timeline', icon: <CalendarRange size={13} /> },
+   596→          ]}
+   597→          value={viewMode}
+   598→          onChange={setViewMode}
+   599→        />
+   600→
+   601→        {/* add node */}
+   602→        <div className="rm-pop-wrap">
+   603→          <Btn
+   604→            size="sm"
+   605→            variant="primary"
+   606→            onClick={() => setPop(pop ? null : { mode: 'menu' })}
+   607→            title="Add a node"
+   608→          >
+   609→            <Plus size={14} /> Add node
+   610→          </Btn>
+   611→          {pop && (
+   612→            <div className="rm-pop" role="dialog" aria-label="Add node">
+   613→              {pop.mode === 'menu' && (
+   614→                <>
+   615→                  <div className="rm-pop-head">
+   616→                    <span className="rm-pop-head-title">Add to the canvas</span>
+   617→                  </div>
+   618→                  {RM_KIND_META.map((k) => (
+   619→                    <button
+   620→                      key={k.kind}
+   621→                      type="button"
+   622→                      className="rm-pop-item"
+   623→                      onClick={() => {
+   624→                        if (k.kind === 'milestone') setPop({ mode: 'milestone' });
+   625→                        else if (k.kind === 'note') setPop({ mode: 'note' });
+   626→                        else setPop({ mode: 'pick', kind: k.kind as 'goal' | 'task' | 'file' });
+   627→                      }}
+   628→                    >
+   629→                      <k.Icon />
+   630→                      {k.label}
+   631→                      <span className="rm-pop-hint">{k.hint}</span>
+   632→                    </button>
+   633→                  ))}
+   634→                </>
+   635→              )}
+   636→
+   637→              {(pop.mode === 'pick' || pop.mode === 'milestone' || pop.mode === 'note') && (
+   638→                <>
+   639→                  <div className="rm-pop-head">
+   640→                    <IconBtn small title="Back" onClick={() => { setPop({ mode: 'menu' }); setPopSearch(''); }}>
+   641→                      <ArrowLeft size={14} />
+   642→                    </IconBtn>
+   643→                    <span className="rm-pop-head-title">
+   644→                      {pop.mode === 'pick'
+   645→                        ? `Pick a ${pop.kind}`
+   646→                        : pop.mode === 'milestone'
+   647→                          ? 'New milestone'
+   648→                          : 'New note'}
+   649→                    </span>
+   650→                  </div>
+   651→
+   652→                  {pop.mode === 'pick' && (
+   653→                    <>
+   654→                      <div className="rm-pop-search">
+   655→                        <Search size={13} />
+   656→                        <input
+   657→                          autoFocus
+   658→                          value={popSearch}
+   659→                          placeholder={`Search ${pop.kind}s…`}
+   660→                          onChange={(e) => setPopSearch(e.target.value)}
+   661→                        />
+   662→                      </div>
+   663→                      <div className="rm-pick-list rm-scroll">
+   664→                        {pickList.map((row) => (
+   665→                          <button
+   666→                            key={row.id}
+   667→                            type="button"
+   668→                            className="rm-pick-row"
+   669→                            onClick={() => {
+   670→                              const kind: RoadmapNodeKind = pop.mode === 'pick' ? pop.kind : 'note';
+   671→                              spawn({
+   672→                                kind,
+   673→                                refId: row.id,
+   674→                                label: row.title,
+   675→                                x: 0, y: 0,
+   676→                                milestoneDate: null,
+   677→                                note: '',
+   678→                                done: false,
+   679→                              });
+   680→                              toast(`${kind === 'goal' ? 'Goal' : kind === 'task' ? 'Task' : 'File'} added`, row.title);
+   681→                            }}
+   682→                          >
+   683→                            <span className="rm-pick-title">{row.title}</span>
+   684→                            <span className="rm-pick-meta">
+   685→                              {row.meta.map((m, i) => (
+   686→                                <span key={i} className="mono">{m}</span>
+   687→                              ))}
+   688→                            </span>
+   689→                          </button>
+   690→                        ))}
+   691→                        {!pickList.length && (
+   692→                          <div className="rm-empty-hint">
+   693→                            Nothing to pick yet — create some in Goals &amp; Work or the Library first.
+   694→                          </div>
+   695→                        )}
+   696→                      </div>
+   697→                    </>
+   698→                  )}
+   699→
+   700→                  {pop.mode === 'milestone' && (
+   701→                    <MiniForm
+   702→                      fields={[
+   703→                        { key: 'title', placeholder: 'Milestone title…', autoFocus: true },
+   704→                        { key: 'date', placeholder: 'Date (yyyy-mm-dd)', type: 'text' },
+   705→                      ]}
+   706→                      submitLabel="Add milestone"
+   707→                      onSubmit={(v) => {
+   708→                        const title = (v.title || '').trim() || 'Milestone';
+   709→                        const date = (v.date || '').trim();
+   710→                        spawn({
+   711→                          kind: 'milestone',
+   712→                          refId: null,
+   713→                          label: title,
+   714→                          x: 0, y: 0,
+   715→                          milestoneDate: /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : null,
+   716→                          note: '',
+   717→                          done: false,
+   718→                        });
+   719→                        toast('Milestone added', title);
+   720→                      }}
+   721→                      onCancel={() => setPop(null)}
+   722→                    />
+   723→                  )}
+   724→
+   725→                  {pop.mode === 'note' && (
+   726→                    <MiniForm
+   727→                      fields={[{ key: 'text', placeholder: 'Note text…', autoFocus: true }]}
+   728→                      submitLabel="Add note"
+   729→                      onSubmit={(v) => {
+   730→                        const text = (v.text || '').trim();
+   731→                        if (!text) return;
+   732→                        spawn({
+   733→                          kind: 'note',
+   734→                          refId: null,
+   735→                          label: text,
+   736→                          x: 0, y: 0,
+   737→                          milestoneDate: null,
+   738→                          note: text,
+   739→                          done: false,
+   740→                        });
+   741→                        toast('Note added');
+   742→                      }}
+   743→                      onCancel={() => setPop(null)}
+   744→                    />
+   745→                  )}
+   746→                </>
+   747→              )}
+   748→            </div>
+   749→          )}
+   750→        </div>
+   751→
+   752→        <Btn
+   753→          size="sm"
+   754→          className={linkMode ? 'rm-on' : ''}
+   755→          disabled={viewMode === 'timeline'}
+   756→          onClick={() => {
+   757→            setLinkMode((v) => !v);
+   758→            setLinkSource(null);
+   759→          }}
+   760→          title="Link mode — click one node, then another"
+   761→        >
+   762→          <Link2 size={14} /> Link
+   763→        </Btn>
+   764→
+   765→        {/* auto-layout options */}
+   766→        <div className="rm-pop-wrap">
+   767→          <Btn
+   768→            size="sm"
+   769→            className={layoutPop ? 'rm-on' : ''}
+   770→            onClick={() => setLayoutPop((v) => !v)}
+   771→            title="Arrange node positions"
+   772→            aria-expanded={layoutPop}
+   773→          >
+   774→            <LayoutGrid size={14} /> Auto-layout
+   775→          </Btn>
+   776→          {layoutPop && (
+   777→            <div className="rm-pop rm-layout-pop" role="dialog" aria-label="Auto-layout options">
+   778→              <div className="rm-pop-head">
+   779→                <span className="rm-pop-head-title">Arrange the canvas</span>
+   780→              </div>
+   781→              <button
+   782→                type="button"
+   783→                className="rm-pop-item"
+   784→                onClick={() => {
+   785→                  setLayoutPop(false);
+   786→                  layoutByLayers();
+   787→                }}
+   788→              >
+   789→                <Layers /> By layers
+   790→                <span className="rm-pop-hint">follow the links</span>
+   791→              </button>
+   792→              <button
+   793→                type="button"
+   794→                className="rm-pop-item"
+   795→                onClick={() => {
+   796→                  setLayoutPop(false);
+   797→                  layoutByKind();
+   798→                }}
+   799→              >
+   800→                <AlignJustify /> By kind
+   801→                <span className="rm-pop-hint">swimlanes</span>
+   802→              </button>
+   803→            </div>
+   804→          )}
+   805→        </div>
+   806→
+   807→        <Btn
+   808→          size="sm"
+   809→          disabled={viewMode === 'timeline'}
+   810→          onClick={() => setFitKey((k) => k + 1)}
+   811→          title="Fit everything in view"
+   812→        >
+   813→          <Maximize2 size={14} /> Fit
+   814→        </Btn>
+   815→
+   816→        {viewMode === 'canvas' && (
+   817→          <div className="rm-zoom-pill">
+   818→            <IconBtn small title="Zoom out" onClick={() => canvasRef.current?.zoomBy(1 / 1.2)}>
+   819→              <ZoomOut size={14} />
+   820→            </IconBtn>
+   821→            <span className="rm-zoom-val mono">{Math.round(zoom * 100)}%</span>
+   822→            <IconBtn small title="Zoom in" onClick={() => canvasRef.current?.zoomBy(1.2)}>
+   823→              <ZoomIn size={14} />
+   824→            </IconBtn>
+   825→          </div>
+   826→        )}
+   827→
+   828→        <Btn
+   829→          size="sm"
+   830→          className={orderOpen ? 'rm-on' : ''}
+   831→          onClick={() => setOrderOpen((v) => !v)}
+   832→          title="Show execution order"
+   833→        >
+   834→          <ListOrdered size={14} /> Order
+   835→        </Btn>
+   836→
+   837→        {/* selection-driven actions */}
+   838→        {selectedNode && (
+   839→          <>
+   840→            <div className="rm-toolbar-sep" />
+   841→            {selectedNode.refId && (
+   842→              <Btn
+   843→                size="sm"
+   844→                onClick={() => {
+   845→                  if (selectedNode.kind === 'file') {
+   846→                    window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: selectedNode.refId }));
+   847→                  } else {
+   848→                    window.dispatchEvent(new CustomEvent('wb-open-item', { detail: selectedNode.refId }));
+   849→                  }
+   850→                }}
+   851→                title="Open the linked goal, task or file"
+   852→              >
+   853→                <ExternalLink size={14} /> Open
+   854→              </Btn>
+   855→            )}
+   856→            <IconBtn
+   857→              danger
+   858→              title="Remove node (Del)"
+   859→              onClick={() => {
+   860→                removeRoadmapNode(roadmap.id, selectedNode.id);
+   861→                setSelection(null);
+   862→                toast('Node removed');
+   863→              }}
+   864→            >
+   865→              <Trash2 size={15} />
+   866→            </IconBtn>
+   867→          </>
+   868→        )}
+   869→        {selectedEdge && (
+   870→          <>
+   871→            <div className="rm-toolbar-sep" />
+   872→            <EdgeLabelInput
+   873→              key={selectedEdge.id}
+   874→              initial={selectedEdge.label}
+   875→              onCommit={(label) => updateRoadmapEdge(roadmap.id, selectedEdge.id, { label })}
+   876→            />
+   877→            <IconBtn
+   878→              danger
+   879→              title="Remove link (Del)"
+   880→              onClick={() => {
+   881→                removeRoadmapEdge(roadmap.id, selectedEdge.id);
+   882→                setSelection(null);
+   883→                toast('Link removed');
+   884→              }}
+   885→            >
+   886→              <Trash2 size={15} />
+   887→            </IconBtn>
+   888→          </>
+   889→        )}
+   890→
+   891→        {(pop || layoutPop) && (
+   892→          <IconBtn small title="Close menu" onClick={() => { setPop(null); setLayoutPop(false); }}>
+   893→            <X size={14} />
+   894→          </IconBtn>
+   895→        )}
+   896→      </div>
+   897→
+   898→      {/* live stats strip */}
+   899→      <div className="rm-stats" aria-label="Roadmap statistics">
+   900→        <span className="rm-stat"><b className="mono">{roadmap.nodes.length}</b> nodes</span>
+   901→        <span className="rm-stats-sep" aria-hidden="true">·</span>
+   902→        <span className="rm-stat"><b className="mono">{roadmap.edges.length}</b> links</span>
+   903→        <span className="rm-stats-sep" aria-hidden="true">·</span>
+   904→        <span className="rm-stat"><b className="mono">{progress}%</b> complete</span>
+   905→        <span className="rm-stats-sep" aria-hidden="true">·</span>
+   906→        <span className="rm-stat">~<b className="mono">{fmtDuration(orderRows.totalEst)}</b> estimated</span>
+   907→        <span className="rm-stats-sep" aria-hidden="true">·</span>
+   908→        <span className="rm-stat" title="Longest chain of estimates, end to end">
+   909→          critical path <b className="mono">{orderRows.criticalEst ? fmtDuration(orderRows.criticalEst) : '—'}</b>
+   910→        </span>
+   911→        {nextUp && (
+   912→          <>
+   913→            <span className="rm-stats-sep" aria-hidden="true">·</span>
+   914→            <button
+   915→              type="button"
+   916→              className="rm-stat-next"
+   917→              onClick={() => focusNode(nextUp.id)}
+   918→              title="Select this node in the current view"
+   919→            >
+   920→              Next up: <span className="rm-stat-next-title">{nextUp.live?.title || nextUp.node.label || 'Untitled'}</span>
+   921→              <span className="mono">· {nextUp.est ? fmtDuration(nextUp.est) : '—'}</span>
+   922→            </button>
+   923→          </>
+   924→        )}
+   925→      </div>
+   926→
+   927→      <div className="rm-body">
+   928→        {viewMode === 'canvas' ? (
+   929→          <RoadmapCanvas
+   930→            ref={canvasRef}
+   931→            roadmap={roadmap}
+   932→            items={items}
+   933→            files={files}
+   934→            selection={selection}
+   935→            onSelect={setSelection}
+   936→            linkMode={linkMode}
+   937→            linkSource={linkSource}
+   938→            onLinkSource={setLinkSource}
+   939→            onLink={(from, to) => {
+   940→              addRoadmapEdge(roadmap.id, from, to);
+   941→              setLinkSource(null);
+   942→              toast('Connected');
+   943→            }}
+   944→            onMoveNode={(nodeId, x, y) => updateRoadmapNode(roadmap.id, nodeId, { x, y })}
+   945→            onToggleMilestone={(node) => updateRoadmapNode(roadmap.id, node.id, { done: !node.done })}
+   946→            onZoomChange={setZoom}
+   947→            fitKey={fitKey}
+   948→          />
+   949→        ) : (
+   950→          <RoadmapTimeline
+   951→            ref={timelineRef}
+   952→            roadmap={roadmap}
+   953→            items={items}
+   954→            files={files}
+   955→            selection={selection}
+   956→            onSelect={setSelection}
+   957→          />
+   958→        )}
+   959→
+   960→        {orderOpen && (
+   961→          <aside className="rm-order-panel" aria-label="Execution order">
+   962→            <div className="rm-order-head">
+   963→              <span className="rm-order-title">
+   964→                <ListOrdered /> Execution order
+   965→              </span>
+   966→              <span className="rm-order-total">
+   967→                estimated <b className="mono">{fmtDuration(orderRows.totalEst)}</b> end to end
+   968→              </span>
+   969→            </div>
+   970→            <div className="rm-order-rows rm-scroll">
+   971→              {orderRows.rows.map((r) => {
+   972→                const Icon = RM_KIND_ICON[r.node.kind];
+   973→                const crit = orderRows.critical.has(r.id);
+   974→                return (
+   975→                  <div
+   976→                    key={r.id}
+   977→                    role="button"
+   978→                    tabIndex={0}
+   979→                    className={[
+   980→                      'rm-order-row',
+   981→                      selection?.kind === 'node' && selection.id === r.id ? 'selected' : '',
+   982→                      crit ? 'rm-critical' : '',
+   983→                    ].filter(Boolean).join(' ')}
+   984→                    onClick={() => focusNode(r.id)}
+   985→                    onKeyDown={(e) => {
+   986→                      if (e.target !== e.currentTarget) return;
+   987→                      if (e.key === 'Enter' || e.key === ' ') {
+   988→                        e.preventDefault();
+   989→                        focusNode(r.id);
+   990→                      }
+   991→                    }}
+   992→                  >
+   993→                    <span className="rm-idx mono">{r.idx + 1}</span>
+   994→                    <span className="rm-row-ico"><Icon /></span>
+   995→                    <span className="rm-row-main">
+   996→                      <span className="rm-row-title">{r.live?.title || r.node.label || 'Untitled'}</span>
+   997→                      <span className="rm-row-sub">
+   998→                        {crit && <span className="rm-crit-chip">critical</span>}
+   999→                        {r.blocked && (
+  1000→                          <span className="rm-blocked-ico" title="Waiting on an unfinished node">
+  1001→                            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+  1002→                              <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" />
+  1003→                              <path d="M12 9v4" />
+  1004→                              <path d="M12 17h.01" />
+  1005→                            </svg>
+  1006→                          </span>
+  1007→                        )}
+  1008→                        {r.live?.deadline && (
+  1009→                          <span className={`mono rm-dl-${r.live.deadlineTone ?? 'ok'}`}>
+  1010→                            {r.live.deadline.slice(5)}
+  1011→                          </span>
+  1012→                        )}
+  1013→                      </span>
+  1014→                    </span>
+  1015→                    <span className="rm-row-times">
+  1016→                      <span className="rm-est mono">{r.est ? fmtDuration(r.est) : '—'}</span>
+  1017→                      <span className="rm-cum mono">Σ {fmtDuration(r.cum)}</span>
+  1018→                    </span>
+  1019→                    <span className="rm-row-sched">
+  1020→                      <IconBtn
+  1021→                        small
+  1022→                        className="rm-sched-btn"
+  1023→                        title="Schedule tomorrow"
+  1024→                        onClick={(e) => {
+  1025→                          e.stopPropagation();
+  1026→                          scheduleRow(r);
+  1027→                        }}
+  1028→                      >
+  1029→                        <CalendarPlus size={13} />
+  1030→                      </IconBtn>
+  1031→                    </span>
+  1032→                  </div>
+  1033→                );
+  1034→              })}
+  1035→              {!orderRows.rows.length && (
+  1036→                <div className="rm-empty-hint">Add nodes to see their execution order here.</div>
+  1037→              )}
+  1038→            </div>
+  1039→            <div className="rm-order-foot">
+  1040→              Estimates use item estimates and your reading pace. Critical path is highlighted —
+  1041→              protect those blocks first. Use the calendar button to drop a row into tomorrow&apos;s plan.
+  1042→            </div>
+  1043→          </aside>
+  1044→        )}
+  1045→      </div>
+  1046→    </div>
+  1047→  );
+  1048→}
+  1049→
+  1050→/* ---------- mini inline form (milestone / note) ---------- */
+  1051→
+  1052→function EdgeLabelInput({ initial, onCommit }: { initial: string; onCommit: (v: string) => void }) {
+  1053→  const [value, setValue] = useState(initial);
+  1054→  return (
+  1055→    <input
+  1056→      className="rm-edge-edit"
+  1057→      value={value}
+  1058→      placeholder="Link label…"
+  1059→      aria-label="Link label"
+  1060→      onChange={(e) => setValue(e.target.value)}
+  1061→      onBlur={() => onCommit(value.trim())}
+  1062→      onKeyDown={(e) => {
+  1063→        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+  1064→      }}
+  1065→    />
+  1066→  );
+  1067→}
+  1068→
+  1069→function MiniForm({
+  1070→  fields,
+  1071→  submitLabel,
+  1072→  onSubmit,
+  1073→  onCancel,
+  1074→}: {
+  1075→  fields: { key: string; placeholder: string; type?: string; autoFocus?: boolean }[];
+  1076→  submitLabel: string;
+  1077→  onSubmit: (values: Record<string, string>) => void;
+  1078→  onCancel: () => void;
+  1079→}) {
+  1080→  const [values, setValues] = useState<Record<string, string>>({});
+  1081→  return (
+  1082→    <div className="rm-mini-form">
+  1083→      {fields.map((f) => (
+  1084→        <input
+  1085→          key={f.key}
+  1086→          className="rm-mini-input"
+  1087→          type={f.type || 'text'}
+  1088→          autoFocus={f.autoFocus}
+  1089→          placeholder={f.placeholder}
+  1090→          value={values[f.key] || ''}
+  1091→          onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+  1092→          onKeyDown={(e) => {
+  1093→            if (e.key === 'Enter') onSubmit(values);
+  1094→            if (e.key === 'Escape') onCancel();
+  1095→          }}
+  1096→        />
+  1097→      ))}
+  1098→      <div className="rm-mini-actions">
+  1099→        <Btn size="sm" onClick={onCancel}>Cancel</Btn>
+  1100→        <Btn size="sm" variant="primary" onClick={() => onSubmit(values)}>{submitLabel}</Btn>
+  1101→      </div>
+  1102→    </div>
+  1103→  );
+  1104→}
+  1105→

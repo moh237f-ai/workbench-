@@ -8,6 +8,7 @@ import { computeProgress, daysUntil, deadlineStatus } from '@/lib/workbench/help
 import { SWATCHES } from '@/lib/workbench/types';
 import type { ItemStatus, ItemType, Priority } from '@/lib/workbench/types';
 import { Btn, Modal, toast } from '../ui/primitives';
+import { DateField } from '../ui/DateField';
 
 /* ---------- Create item ---------- */
 
@@ -90,7 +91,7 @@ export function ItemFormModal({
         </div>
         <div className="field">
           <label htmlFor="f-deadline">Deadline</label>
-          <input id="f-deadline" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+          <DateField id="f-deadline" value={deadline} onChange={setDeadline} compact placeholder="No deadline" />
         </div>
       </div>
       <div className="field-row">
@@ -302,7 +303,7 @@ export function ItemDetailModal({
         </div>
         <div className="field">
           <label htmlFor="d-deadline">Deadline</label>
-          <input id="d-deadline" type="date" value={deadline} onChange={(e) => setDeadline(e.target.value)} />
+          <DateField id="d-deadline" value={deadline} onChange={setDeadline} compact placeholder="No deadline" />
         </div>
       </div>
 

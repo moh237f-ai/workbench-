@@ -4,13 +4,14 @@
 import './library.css';
 
 import { useMemo, useRef, useState } from 'react';
-import { FileText, ImagePlus, Trash2 } from 'lucide-react';
+import { FileText, ImagePlus, PenLine, Star, Trash2 } from 'lucide-react';
 import { useWB, wbFileAvgSecPerPage, wbFileMinutes } from '@/lib/workbench/store';
 import { fmtDuration, parseDate } from '@/lib/workbench/helpers';
-import { SWATCHES, type FileCoverMode } from '@/lib/workbench/types';
+import { SWATCHES, type FileCoverMode, type LibraryFolder } from '@/lib/workbench/types';
 import { purgeFileArtifacts } from '@/lib/workbench/idb';
 import { applyCustomCover, refreshCover, useFileCover } from '@/lib/workbench/covers';
 import { Btn, Modal, Seg, toast, useConfirm } from '../ui/primitives';
+import { DateField } from '../ui/DateField';
 
 /* seconds → "Xs" / "Xm Ys" (tooltip format) */
 function fmtPageSecs(sec: number): string {
@@ -27,11 +28,34 @@ function pmapCellBackground(sec: number): string {
   return `color-mix(in srgb, var(--pine) ${mix}%, transparent)`;
 }
 
+/** Folder options in tree order (pre-order walk) — "— " per level so a flat <select> reads like the tree. */
+function folderOptions(folders: LibraryFolder[]): { id: string; label: string }[] {
+  const known = new Set(folders.map((f) => f.id));
+  const kidsOf = new Map<string | null, LibraryFolder[]>();
+  for (const f of folders) {
+    const key = f.parentId && known.has(f.parentId) ? f.parentId : null; // orphans → root
+    const arr = kidsOf.get(key);
+    if (arr) arr.push(f);
+    else kidsOf.set(key, [f]);
+  }
+  const out: { id: string; label: string }[] = [];
+  const walk = (parent: string | null, depth: number): void => {
+    for (const f of kidsOf.get(parent) ?? []) {
+      out.push({ id: f.id, label: `${'— '.repeat(Math.min(depth, 6))}${f.name}` });
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  return out;
+}
+
 export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: () => void }) {
   const file = useWB((s) => s.files.find((f) => f.id === fileId));
   const sessions = useWB((s) => s.readingSessions);
+  const folders = useWB((s) => s.libraryFolders);
   const updateFile = useWB((s) => s.updateFile);
   const deleteFile = useWB((s) => s.deleteFile);
+  const moveFileToFolder = useWB((s) => s.moveFileToFolder);
   const confirm = useConfirm();
   const coverInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -52,6 +76,7 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
         .slice(0, 5),
     [sessions, fileId]
   );
+  const folderOpts = useMemo(() => folderOptions(folders), [folders]);
 
   if (!file) return null;
 
@@ -204,14 +229,32 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
               onKeyDown={(e) => e.key === 'Enter' && save()}
             />
           </div>
+          <DateField
+            id="ff-deadline"
+            label="Deadline"
+            value={deadline}
+            onChange={setDeadline}
+          />
           <div className="field">
-            <label htmlFor="ff-deadline">Deadline</label>
-            <input
-              id="ff-deadline"
-              type="date"
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.value)}
-            />
+            <label htmlFor="ff-folder">Folder</label>
+            <select
+              id="ff-folder"
+              value={file.folderId ?? ''}
+              onChange={(e) => {
+                const v = e.target.value || null;
+                moveFileToFolder(file.id, v);
+                const f = folders.find((x) => x.id === v);
+                toast(f ? 'Moved to folder' : 'Removed from folder', f ? f.name : file.title);
+              }}
+            >
+              <option value="">No folder</option>
+              {folderOpts.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.label}
+                </option>
+              ))}
+            </select>
+            <div className="field-help">Applied immediately — mirrors the shelf folder chips.</div>
           </div>
           <div className="field">
             <label htmlFor="ff-tags">Tags</label>
@@ -276,6 +319,22 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
           <div className="lib-insight-label">Current page</div>
           <div className="lib-insight-value">p.{file.currentPage}</div>
         </div>
+        {(file.favoritePages?.length ?? 0) > 0 && (
+          <div className="lib-insight">
+            <div className="lib-insight-label">
+              <Star size={10} aria-hidden="true" /> Favorites
+            </div>
+            <div className="lib-insight-value">{file.favoritePages.length}</div>
+          </div>
+        )}
+        {(file.annoPages?.length ?? 0) > 0 && (
+          <div className="lib-insight">
+            <div className="lib-insight-label">
+              <PenLine size={10} aria-hidden="true" /> Annotated
+            </div>
+            <div className="lib-insight-value">{file.annoPages.length}</div>
+          </div>
+        )}
       </div>
 
       {/* page time map */}

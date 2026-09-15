@@ -1,0 +1,994 @@
+     1→/* ==================== Planner — Day timeline & Week board ==================== */
+     2→'use client';
+     3→
+     4→import React, { useEffect, useMemo, useRef, useState } from 'react';
+     5→import { BookOpen, Check, ChevronLeft, ChevronRight, Wand2, X } from 'lucide-react';
+     6→import {
+     7→  useWB,
+     8→  wbFileDeadlineStatus,
+     9→  wbFilePlansForDate,
+    10→  wbFileProgress,
+    11→  wbFileReadPages,
+    12→  wbIsBlocked,
+    13→  wbPriorityWeight,
+    14→  wbTimeboxedItems,
+    15→} from '@/lib/workbench/store';
+    16→import type { FilePlanBlock, Item, ResourceFile } from '@/lib/workbench/types';
+    17→import {
+    18→  addDaysStr,
+    19→  clamp,
+    20→  dateTimeFromMin,
+    21→  daysUntil,
+    22→  fmtDateLong,
+    23→  fmtDateNice,
+    24→  fmtDuration,
+    25→  minToHHMM,
+    26→  parseDate,
+    27→  plannedStartToMin,
+    28→  startOfWeekStr,
+    29→  timeDiffMin,
+    30→  todayStr,
+    31→} from '@/lib/workbench/helpers';
+    32→import { Btn, IconBtn, Seg, toast, useNow } from '../ui/primitives';
+    33→import { useViewActions } from '../views/viewCtx';
+    34→import './planner.css';
+    35→
+    36→/* ---------- constants ---------- */
+    37→
+    38→const DAY_START_MIN = 360; // 06:00
+    39→const DAY_END_MIN = 1380; // 23:00
+    40→const HOUR_PX = 56;
+    41→const PX_PER_MIN = HOUR_PX / 60;
+    42→const SNAP_MIN = 5;
+    43→const TIMELINE_H = (DAY_END_MIN - DAY_START_MIN) * PX_PER_MIN;
+    44→
+    45→const snap = (n: number): number => Math.round(n / SNAP_MIN) * SNAP_MIN;
+    46→
+    47→function timeboxDurMin(it: Item): number {
+    48→  if (it.plannedStart && it.plannedEnd) {
+    49→    const d = timeDiffMin(it.plannedStart.slice(11, 16), it.plannedEnd.slice(11, 16));
+    50→    if (d > 0) return d;
+    51→  }
+    52→  return it.estimateMin || 30;
+    53→}
+    54→
+    55→interface Slot {
+    56→  start: number;
+    57→  end: number;
+    58→}
+    59→
+    60→/** first free slot ≥ max(8:00, now-if-today) in 5-min steps */
+    61→function nextFreeSlot(duration: number, occupied: Slot[], fromMin: number): number {
+    62→  let start = snap(Math.max(480, fromMin));
+    63→  const limit = 1440 - duration;
+    64→  while (start <= limit) {
+    65→    if (occupied.every((b) => start + duration <= b.start || start >= b.end)) return start;
+    66→    start += SNAP_MIN;
+    67→  }
+    68→  const lastEnd = occupied.reduce((m, b) => Math.max(m, b.end), 0);
+    69→  return clamp(Math.max(480, lastEnd), 480, 1380);
+    70→}
+    71→
+    72→/* ---------- pointer drag ---------- */
+    73→
+    74→type DragKind = 'item' | 'file';
+    75→
+    76→interface DragState {
+    77→  kind: DragKind;
+    78→  id: string;
+    79→  mode: 'move' | 'resize';
+    80→  pointerId: number;
+    81→  startY: number;
+    82→  origStart: number;
+    83→  origDur: number;
+    84→  start: number;
+    85→  dur: number;
+    86→  movedPx: number;
+    87→}
+    88→
+    89→/* ==================== header actions ==================== */
+    90→
+    91→export function PlannerHeaderActions() {
+    92→  const mode = useWB((s) => s.plannerMode);
+    93→  const setMode = useWB((s) => s.setPlannerMode);
+    94→  const setPlannerDate = useWB((s) => s.setPlannerDate);
+    95→  return (
+    96→    <>
+    97→      <Seg<'day' | 'week'>
+    98→        value={mode}
+    99→        onChange={setMode}
+   100→        options={[
+   101→          { id: 'day', label: 'Day' },
+   102→          { id: 'week', label: 'Week' },
+   103→        ]}
+   104→      />
+   105→      <Btn size="sm" variant="ghost" onClick={() => setPlannerDate(todayStr())}>
+   106→        Today
+   107→      </Btn>
+   108→    </>
+   109→  );
+   110→}
+   111→
+   112→/* ==================== root ==================== */
+   113→
+   114→export function PlannerView() {
+   115→  const mode = useWB((s) => s.plannerMode);
+   116→  const date = useWB((s) => s.plannerDate);
+   117→  const navigatePlanner = useWB((s) => s.navigatePlanner);
+   118→  const setPlannerDate = useWB((s) => s.setPlannerDate);
+   119→  const setPlannerMode = useWB((s) => s.setPlannerMode);
+   120→
+   121→  const weekStart = useMemo(() => startOfWeekStr(parseDate(date)), [date]);
+   122→  const weekEnd = addDaysStr(weekStart, 6);
+   123→  const openDay = (d: string) => {
+   124→    setPlannerDate(d);
+   125→    setPlannerMode('day');
+   126→  };
+   127→
+   128→  return (
+   129→    <div className="fade-in">
+   130→      <div className="plan-nav">
+   131→        <div className="plan-nav-title wb-display">
+   132→          {mode === 'day'
+   133→            ? date === todayStr()
+   134→              ? 'Today'
+   135→              : fmtDateLong(parseDate(date))
+   136→            : `${fmtDateNice(weekStart)} – ${fmtDateNice(weekEnd)}`}
+   137→        </div>
+   138→        <div className="plan-nav-actions">
+   139→          <IconBtn
+   140→            title={mode === 'day' ? 'Previous day' : 'Previous week'}
+   141→            onClick={() => navigatePlanner(mode === 'day' ? -1 : -7)}
+   142→          >
+   143→            <ChevronLeft />
+   144→          </IconBtn>
+   145→          <Btn size="sm" variant="ghost" onClick={() => setPlannerDate(todayStr())}>
+   146→            Today
+   147→          </Btn>
+   148→          <IconBtn
+   149→            title={mode === 'day' ? 'Next day' : 'Next week'}
+   150→            onClick={() => navigatePlanner(mode === 'day' ? 1 : 7)}
+   151→          >
+   152→            <ChevronRight />
+   153→          </IconBtn>
+   154→        </div>
+   155→      </div>
+   156→      {mode === 'day' ? <DayPlanner date={date} /> : <WeekPlanner date={date} onOpenDay={openDay} />}
+   157→    </div>
+   158→  );
+   159→}
+   160→
+   161→/* ==================== now line (isolated so only it re-renders each second) ==================== */
+   162→
+   163→function NowLine() {
+   164→  const now = useNow(true);
+   165→  const nowMin = now.getHours() * 60 + now.getMinutes();
+   166→  if (nowMin < DAY_START_MIN || nowMin > DAY_END_MIN) return null;
+   167→  return (
+   168→    <div className="plan-now" style={{ top: (nowMin - DAY_START_MIN) * PX_PER_MIN }}>
+   169→      <span className="plan-now-bubble mono">{minToHHMM(nowMin)}</span>
+   170→    </div>
+   171→  );
+   172→}
+   173→
+   174→/* ==================== day mode ==================== */
+   175→
+   176→function DayPlanner({ date }: { date: string }) {
+   177→  const items = useWB((s) => s.items);
+   178→  const files = useWB((s) => s.files);
+   179→  const filePlans = useWB((s) => s.filePlans);
+   180→  const capacity = useWB((s) => s.dailyCapacityMin);
+   181→  const updateItem = useWB((s) => s.updateItem);
+   182→  const updateFilePlan = useWB((s) => s.updateFilePlan);
+   183→  const deleteFilePlan = useWB((s) => s.deleteFilePlan);
+   184→  const addFilePlan = useWB((s) => s.addFilePlan);
+   185→  const snapshot = useWB((s) => s.snapshot);
+   186→  const { openItemDetail } = useViewActions();
+   187→
+   188→  const scrollRef = useRef<HTMLDivElement | null>(null);
+   189→  const [drag, setDrag] = useState<DragState | null>(null);
+   190→
+   191→  /* auto-scroll to 08:00 on mount / date change */
+   192→  useEffect(() => {
+   193→    const el = scrollRef.current;
+   194→    if (el) el.scrollTop = Math.max(0, (480 - DAY_START_MIN) * PX_PER_MIN - 8);
+   195→  }, [date]);
+   196→
+   197→  /* safety net: discard drag if pointerup/cancel escapes the captured element */
+   198→  useEffect(() => {
+   199→    if (!drag) return;
+   200→    const clear = () => setDrag(null);
+   201→    window.addEventListener('pointerup', clear);
+   202→    window.addEventListener('pointercancel', clear);
+   203→    return () => {
+   204→      window.removeEventListener('pointerup', clear);
+   205→      window.removeEventListener('pointercancel', clear);
+   206→    };
+   207→  }, [drag]);
+   208→
+   209→  /* ---------- data ---------- */
+   210→  const timeboxed = useMemo(() => wbTimeboxedItems(items, date), [items, date]);
+   211→  const fileBlocks = useMemo(() => wbFilePlansForDate(filePlans, date), [filePlans, date]);
+   212→  const fileById = useMemo(() => {
+   213→    const m = new Map<string, ResourceFile>();
+   214→    files.forEach((f) => m.set(f.id, f));
+   215→    return m;
+   216→  }, [files]);
+   217→
+   218→  const occupied = useMemo<Slot[]>(
+   219→    () => [
+   220→      ...timeboxed.map((it) => {
+   221→        const s = plannedStartToMin(it.plannedStart ?? '');
+   222→        return { start: s, end: s + timeboxDurMin(it) };
+   223→      }),
+   224→      ...fileBlocks.map((p) => ({ start: p.startMin, end: p.startMin + p.minutes })),
+   225→    ],
+   226→    [timeboxed, fileBlocks]
+   227→  );
+   228→
+   229→  const plannedItemMin = useMemo(() => timeboxed.reduce((s, it) => s + timeboxDurMin(it), 0), [timeboxed]);
+   230→  const plannedFileMin = useMemo(() => fileBlocks.reduce((s, p) => s + p.minutes, 0), [fileBlocks]);
+   231→  const plannedMin = plannedItemMin + plannedFileMin;
+   232→  const overCap = plannedMin > capacity;
+   233→  const blockCount = timeboxed.length + fileBlocks.length;
+   234→
+   235→  const suggested = useMemo(
+   236→    () =>
+   237→      items
+   238→        .filter((i) => {
+   239→          if (['done', 'archived', 'inbox'].includes(i.status)) return false;
+   240→          if (i.plannedStart && i.plannedStart.slice(0, 10) === date) return false;
+   241→          if (wbIsBlocked(items, i)) return false;
+   242→          const du = i.deadline ? daysUntil(i.deadline) : null;
+   243→          return (du !== null && du <= 3) || i.priority === 'p0' || i.priority === 'p1';
+   244→        })
+   245→        .sort((a, b) => {
+   246→          const p = wbPriorityWeight(a.priority) - wbPriorityWeight(b.priority);
+   247→          if (p) return p;
+   248→          return (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31');
+   249→        })
+   250→        .slice(0, 30),
+   251→    [items, date]
+   252→  );
+   253→
+   254→  const readingGoals = useMemo(
+   255→    () =>
+   256→      files
+   257→        .filter((f) => {
+   258→          if (f.archived) return false;
+   259→          const prog = wbFileProgress(f);
+   260→          if (prog >= 100) return false;
+   261→          if (f.deadline && daysUntil(f.deadline) <= 7) return true;
+   262→          return prog > 0 || !!f.deadline; /* in progress, or unread with a deadline */
+   263→        })
+   264→        .sort((a, b) => (a.deadline || '9999-12-31').localeCompare(b.deadline || '9999-12-31'))
+   265→        .slice(0, 30),
+   266→    [files]
+   267→  );
+   268→
+   269→  /* ---------- scheduling ---------- */
+   270→  const nowMinutes = (): number =>
+   271→    date === todayStr() ? new Date().getHours() * 60 + new Date().getMinutes() : 0;
+   272→
+   273→  const scheduleItem = (it: Item) => {
+   274→    const dur = it.estimateMin || 30;
+   275→    const start = nextFreeSlot(dur, occupied, nowMinutes());
+   276→    updateItem(
+   277→      it.id,
+   278→      {
+   279→        plannedStart: dateTimeFromMin(date, start),
+   280→        plannedEnd: dateTimeFromMin(date, start + dur),
+   281→        startDate: date,
+   282→      },
+   283→      { snapshot: true }
+   284→    );
+   285→    toast('Scheduled', `${it.title} at ${minToHHMM(start)}`);
+   286→  };
+   287→
+   288→  const addReadingBlock = (f: ResourceFile) => {
+   289→    const start = nextFreeSlot(30, occupied, nowMinutes());
+   290→    addFilePlan(f.id, date, start, 30);
+   291→    toast('Reading block added', `${f.title} at ${minToHHMM(start)} · 30m`);
+   292→  };
+   293→
+   294→  const autoPlan = () => {
+   295→    const occ = occupied.map((o) => ({ ...o }));
+   296→    let planned = plannedMin;
+   297→    let blocks = 0;
+   298→    let addedMin = 0;
+   299→    let snapped = false;
+   300→    const ensureSnap = () => {
+   301→      if (!snapped) {
+   302→        snapshot();
+   303→        snapped = true;
+   304→      }
+   305→    };
+   306→    for (const it of suggested) {
+   307→      if (planned >= capacity) break;
+   308→      const dur = it.estimateMin || 30;
+   309→      const start = nextFreeSlot(dur, occ, nowMinutes());
+   310→      ensureSnap();
+   311→      updateItem(it.id, {
+   312→        plannedStart: dateTimeFromMin(date, start),
+   313→        plannedEnd: dateTimeFromMin(date, start + dur),
+   314→        startDate: date,
+   315→      });
+   316→      occ.push({ start, end: start + dur });
+   317→      planned += dur;
+   318→      blocks++;
+   319→      addedMin += dur;
+   320→    }
+   321→    let readings = 0;
+   322→    for (const f of readingGoals) {
+   323→      if (readings >= 2 || planned >= capacity) break;
+   324→      const start = nextFreeSlot(30, occ, nowMinutes());
+   325→      ensureSnap();
+   326→      addFilePlan(f.id, date, start, 30);
+   327→      occ.push({ start, end: start + 30 });
+   328→      planned += 30;
+   329→      blocks++;
+   330→      addedMin += 30;
+   331→      readings++;
+   332→    }
+   333→    if (!blocks) {
+   334→      toast('Nothing to plan', 'Capacity is already committed.');
+   335→      return;
+   336→    }
+   337→    toast('Auto-planned', `Planned ${blocks} block${blocks === 1 ? '' : 's'} · ${fmtDuration(addedMin)}`);
+   338→  };
+   339→
+   340→  /* ---------- pointer drag (move + resize) ---------- */
+   341→  const openBlock = (kind: DragKind, id: string) => {
+   342→    if (kind === 'item') openItemDetail(id);
+   343→    else window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: id }));
+   344→  };
+   345→
+   346→  const beginDrag = (
+   347→    e: React.PointerEvent<HTMLElement>,
+   348→    kind: DragKind,
+   349→    id: string,
+   350→    mode: 'move' | 'resize',
+   351→    origStart: number,
+   352→    origDur: number
+   353→  ) => {
+   354→    if (e.pointerType === 'mouse' && e.button !== 0) return;
+   355→    e.stopPropagation();
+   356→    try {
+   357→      e.currentTarget.setPointerCapture(e.pointerId);
+   358→    } catch {
+   359→      /* pointer already released — drag simply won't start */
+   360→    }
+   361→    setDrag({
+   362→      kind,
+   363→      id,
+   364→      mode,
+   365→      pointerId: e.pointerId,
+   366→      startY: e.clientY,
+   367→      origStart,
+   368→      origDur,
+   369→      start: origStart,
+   370→      dur: origDur,
+   371→      movedPx: 0,
+   372→    });
+   373→  };
+   374→
+   375→  const onDragMove = (e: React.PointerEvent<HTMLElement>) => {
+   376→    if (!drag || drag.pointerId !== e.pointerId) return;
+   377→    const dy = e.clientY - drag.startY;
+   378→    const dMin = dy / PX_PER_MIN;
+   379→    const movedPx = Math.max(drag.movedPx, Math.abs(dy));
+   380→    if (drag.mode === 'move') {
+   381→      const start = clamp(snap(drag.origStart + dMin), 0, 1440 - drag.dur);
+   382→      setDrag({ ...drag, start, movedPx });
+   383→    } else {
+   384→      const dur = clamp(snap(drag.origDur + dMin), 15, 1440 - drag.start);
+   385→      setDrag({ ...drag, dur, movedPx });
+   386→    }
+   387→  };
+   388→
+   389→  const onDragEnd = (e: React.PointerEvent<HTMLElement>, cancelled: boolean) => {
+   390→    if (!drag || drag.pointerId !== e.pointerId) return;
+   391→    const d = drag;
+   392→    setDrag(null);
+   393→    if (cancelled) return;
+   394→    if (d.movedPx < 4) {
+   395→      if (d.mode === 'move') openBlock(d.kind, d.id);
+   396→      return;
+   397→    }
+   398→    if (d.mode === 'move' && d.start === d.origStart) return;
+   399→    if (d.mode === 'resize' && d.dur === d.origDur) return;
+   400→    if (d.kind === 'item') {
+   401→      const patch: Partial<Item> = {
+   402→        plannedStart: dateTimeFromMin(date, d.start),
+   403→        plannedEnd: dateTimeFromMin(date, d.start + d.dur),
+   404→        startDate: date,
+   405→      };
+   406→      if (d.mode === 'resize') patch.estimateMin = d.dur;
+   407→      updateItem(d.id, patch, { snapshot: true });
+   408→    } else {
+   409→      snapshot();
+   410→      updateFilePlan(d.id, { startMin: d.start, minutes: d.dur });
+   411→    }
+   412→  };
+   413→
+   414→  const dragFor = (kind: DragKind, id: string): DragState | null =>
+   415→    drag && drag.kind === kind && drag.id === id ? drag : null;
+   416→
+   417→  const blockTop = (startMin: number) => Math.max(0, Math.round((startMin - DAY_START_MIN) * PX_PER_MIN));
+   418→  const blockHeight = (startMin: number, dur: number) =>
+   419→    Math.max(24, Math.round((startMin + dur - Math.max(startMin, DAY_START_MIN)) * PX_PER_MIN));
+   420→
+   421→  const hours = useMemo(() => {
+   422→    const out: number[] = [];
+   423→    for (let h = DAY_START_MIN / 60; h <= DAY_END_MIN / 60; h++) out.push(h);
+   424→    return out;
+   425→  }, []);
+   426→  const today = todayStr();
+   427→
+   428→  /* ---------- render ---------- */
+   429→  return (
+   430→    <div className="plan-day-grid">
+   431→      {/* -------- timeline -------- */}
+   432→      <div className="card plan-tl-card">
+   433→        <div className="plan-tl-head">
+   434→          <span className="plan-tl-count">
+   435→            {blockCount
+   436→              ? `${blockCount} block${blockCount === 1 ? '' : 's'} · ${fmtDuration(plannedMin)} planned`
+   437→              : 'Timeline · 06:00 – 23:00'}
+   438→          </span>
+   439→        </div>
+   440→        <div className="plan-tl-scroll plan-scroll" ref={scrollRef}>
+   441→          <div className="plan-tl" style={{ height: TIMELINE_H }}>
+   442→            <div className="plan-tl-gutter" aria-hidden>
+   443→              {hours.slice(0, -1).map((h) => (
+   444→                <span key={h} style={{ top: (h * 60 - DAY_START_MIN) * PX_PER_MIN - 7 }}>
+   445→                  {String(h).padStart(2, '0')}:00
+   446→                </span>
+   447→              ))}
+   448→            </div>
+   449→            <div className="plan-tl-lanes">
+   450→              {hours.map((h) => (
+   451→                <div
+   452→                  key={h}
+   453→                  className="plan-hour-line"
+   454→                  style={{ top: Math.round((h * 60 - DAY_START_MIN) * PX_PER_MIN) }}
+   455→                />
+   456→              ))}
+   457→              {hours.slice(0, -1).map((h) => (
+   458→                <div
+   459→                  key={`h${h}`}
+   460→                  className="plan-half-line"
+   461→                  style={{ top: Math.round((h * 60 - DAY_START_MIN) * PX_PER_MIN + HOUR_PX / 2) }}
+   462→                />
+   463→              ))}
+   464→              {date === today && <NowLine />}
+   465→              {!blockCount && (
+   466→                <div className="plan-empty">
+   467→                  <div>
+   468→                    <div className="plan-empty-title">A clear day</div>
+   469→                    <div className="plan-empty-sub">pull work in from the backlog →</div>
+   470→                  </div>
+   471→                </div>
+   472→              )}
+   473→
+   474→              {/* item timeboxes */}
+   475→              {timeboxed.map((it) => {
+   476→                const g = dragFor('item', it.id);
+   477→                const startMin = g ? g.start : plannedStartToMin(it.plannedStart ?? '');
+   478→                const durMin = g ? g.dur : timeboxDurMin(it);
+   479→                const clamped = startMin < DAY_START_MIN;
+   480→                const style: React.CSSProperties = {
+   481→                  top: blockTop(startMin),
+   482→                  height: blockHeight(startMin, durMin),
+   483→                };
+   484→                if (it.color) (style as Record<string, string | number>)['--stripe'] = it.color;
+   485→                return (
+   486→                  <div
+   487→                    key={it.id}
+   488→                    className={`plan-block plan-block-item${it.status === 'done' ? ' done' : ''}${g ? ' dragging' : ''}`}
+   489→                    style={style}
+   490→                    role="button"
+   491→                    tabIndex={0}
+   492→                    aria-label={`${it.title}, ${minToHHMM(startMin)} to ${minToHHMM(startMin + durMin)}`}
+   493→                    onPointerDown={(e) => beginDrag(e, 'item', it.id, 'move', startMin, durMin)}
+   494→                    onPointerMove={onDragMove}
+   495→                    onPointerUp={(e) => onDragEnd(e, false)}
+   496→                    onPointerCancel={(e) => onDragEnd(e, true)}
+   497→                    onKeyDown={(e) => {
+   498→                      if (e.key === 'Enter' || e.key === ' ') {
+   499→                        e.preventDefault();
+   500→                        openItemDetail(it.id);
+   501→                      }
+   502→                    }}
+   503→                  >
+   504→                    <div className="plan-block-time mono">
+   505→                      {clamped && <span aria-hidden>↑ </span>}
+   506→                      {minToHHMM(startMin)}–{minToHHMM(startMin + durMin)}
+   507→                    </div>
+   508→                    <div className="plan-block-title">{it.title}</div>
+   509→                    <div
+   510→                      className="plan-block-resize"
+   511→                      role="separator"
+   512→                      aria-label="Resize block"
+   513→                      onPointerDown={(e) => beginDrag(e, 'item', it.id, 'resize', startMin, durMin)}
+   514→                    />
+   515→                  </div>
+   516→                );
+   517→              })}
+   518→
+   519→              {/* file reading blocks */}
+   520→              {fileBlocks.map((p) => {
+   521→                const g = dragFor('file', p.id);
+   522→                const startMin = g ? g.start : p.startMin;
+   523→                const durMin = g ? g.dur : p.minutes;
+   524→                const f = fileById.get(p.fileId);
+   525→                return (
+   526→                  <div
+   527→                    key={p.id}
+   528→                    className={`plan-block plan-block-file${p.done ? ' done' : ''}${g ? ' dragging' : ''}`}
+   529→                    style={{ top: blockTop(startMin), height: blockHeight(startMin, durMin) }}
+   530→                    role="button"
+   531→                    tabIndex={0}
+   532→                    aria-label={`Read ${f?.title || 'file'}, ${minToHHMM(startMin)} to ${minToHHMM(startMin + durMin)}`}
+   533→                    onPointerDown={(e) => beginDrag(e, 'file', p.id, 'move', startMin, durMin)}
+   534→                    onPointerMove={onDragMove}
+   535→                    onPointerUp={(e) => onDragEnd(e, false)}
+   536→                    onPointerCancel={(e) => onDragEnd(e, true)}
+   537→                    onKeyDown={(e) => {
+   538→                      if (e.key === 'Enter' || e.key === ' ') {
+   539→                        e.preventDefault();
+   540→                        window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: p.fileId }));
+   541→                      }
+   542→                    }}
+   543→                  >
+   544→                    <div className="plan-block-time mono">
+   545→                      <BookOpen size={11} className="plan-block-ico" aria-hidden />
+   546→                      {minToHHMM(startMin)}–{minToHHMM(startMin + durMin)}
+   547→                    </div>
+   548→                    <div className="plan-block-title">{f?.title || 'Removed file'}</div>
+   549→                    <button
+   550→                      type="button"
+   551→                      className={`plan-check${p.done ? ' on' : ''}`}
+   552→                      title={p.done ? 'Mark as not read' : 'Mark as read'}
+   553→                      aria-label={p.done ? 'Mark reading block as not done' : 'Mark reading block as done'}
+   554→                      onPointerDown={(e) => e.stopPropagation()}
+   555→                      onClick={(e) => {
+   556→                        e.stopPropagation();
+   557→                        updateFilePlan(p.id, { done: !p.done });
+   558→                      }}
+   559→                    >
+   560→                      <Check size={11} />
+   561→                    </button>
+   562→                    <button
+   563→                      type="button"
+   564→                      className="plan-x"
+   565→                      title="Remove reading block"
+   566→                      aria-label="Remove reading block"
+   567→                      onPointerDown={(e) => e.stopPropagation()}
+   568→                      onClick={(e) => {
+   569→                        e.stopPropagation();
+   570→                        deleteFilePlan(p.id);
+   571→                      }}
+   572→                    >
+   573→                      <X size={11} />
+   574→                    </button>
+   575→                    <div
+   576→                      className="plan-block-resize"
+   577→                      role="separator"
+   578→                      aria-label="Resize reading block"
+   579→                      onPointerDown={(e) => beginDrag(e, 'file', p.id, 'resize', startMin, durMin)}
+   580→                    />
+   581→                  </div>
+   582→                );
+   583→              })}
+   584→            </div>
+   585→          </div>
+   586→        </div>
+   587→      </div>
+   588→
+   589→      {/* -------- backlog -------- */}
+   590→      <div className="plan-side">
+   591→        {/* capacity */}
+   592→        <div className="card plan-card">
+   593→          <div className="plan-card-head">
+   594→            <span className="plan-card-title">Capacity</span>
+   595→            <span className="mono plan-cap-num">
+   596→              {fmtDuration(plannedMin)} / {fmtDuration(capacity)}
+   597→            </span>
+   598→          </div>
+   599→          <div className={`plan-meter${overCap ? ' over' : ''}`}>
+   600→            <span style={{ width: `${Math.min(100, (plannedMin / Math.max(1, capacity)) * 100)}%` }} />
+   601→          </div>
+   602→          <div className={`plan-meter-note${overCap ? ' over' : ''}`}>
+   603→            {overCap
+   604→              ? `Over by ${fmtDuration(plannedMin - capacity)} — consider moving a block.`
+   605→              : plannedMin === 0
+   606→                ? 'Nothing planned yet.'
+   607→                : `${fmtDuration(capacity - plannedMin)} of capacity free.`}
+   608→          </div>
+   609→        </div>
+   610→
+   611→        {/* suggested work */}
+   612→        <div className="card plan-card">
+   613→          <div className="plan-card-head">
+   614→            <span className="plan-card-title">Suggested work</span>
+   615→            <span className="plan-card-count">{suggested.length}</span>
+   616→          </div>
+   617→          {suggested.length ? (
+   618→            <div className="plan-sug-list plan-scroll">
+   619→              {suggested.map((it) => {
+   620→                const du = it.deadline ? daysUntil(it.deadline) : null;
+   621→                return (
+   622→                  <div key={it.id} className="plan-sug-row">
+   623→                    <div className="plan-sug-main">
+   624→                      <div className="plan-sug-title" title={it.title}>
+   625→                        {it.title}
+   626→                      </div>
+   627→                      <div className="plan-sug-chips">
+   628→                        {it.priority === 'p0' && <span className="chip chip-over">P0</span>}
+   629→                        {it.priority === 'p1' && <span className="chip chip-soon">P1</span>}
+   630→                        {du !== null && du < 0 && (
+   631→                          <span className="chip chip-over">overdue {Math.abs(du)}d</span>
+   632→                        )}
+   633→                        {du === 0 && <span className="chip chip-soon">due today</span>}
+   634→                        {du !== null && du > 0 && du <= 3 && (
+   635→                          <span className="chip chip-soon">due {du}d</span>
+   636→                        )}
+   637→                      </div>
+   638→                    </div>
+   639→                    <Btn size="sm" onClick={() => scheduleItem(it)}>
+   640→                      + Add
+   641→                    </Btn>
+   642→                  </div>
+   643→                );
+   644→              })}
+   645→            </div>
+   646→          ) : (
+   647→            <div className="plan-side-empty">No pressing work — clear waters.</div>
+   648→          )}
+   649→        </div>
+   650→
+   651→        {/* reading goals */}
+   652→        <div className="card plan-card">
+   653→          <div className="plan-card-head">
+   654→            <span className="plan-card-title">Reading goals</span>
+   655→            <span className="plan-card-count">{readingGoals.length}</span>
+   656→          </div>
+   657→          {readingGoals.length ? (
+   658→            <div className="plan-sug-list plan-scroll">
+   659→              {readingGoals.map((f) => {
+   660→                const left = Math.max(0, f.pageCount - wbFileReadPages(f));
+   661→                const du = f.deadline ? daysUntil(f.deadline) : null;
+   662→                const st = wbFileDeadlineStatus(f);
+   663→                return (
+   664→                  <div key={f.id} className="plan-sug-row">
+   665→                    <BookOpen size={15} className="plan-read-ico" aria-hidden />
+   666→                    <div className="plan-sug-main">
+   667→                      <div className="plan-sug-title" title={f.title}>
+   668→                        {f.title}
+   669→                      </div>
+   670→                      <div className="plan-sug-chips">
+   671→                        <span className="chip chip-ok">{left} pages left</span>
+   672→                        {st === 'over' && <span className="chip chip-over">overdue</span>}
+   673→                        {du === 0 && <span className="chip chip-soon">due today</span>}
+   674→                        {du !== null && du > 0 && (
+   675→                          <span className={`chip ${st === 'soon' ? 'chip-soon' : 'chip-ok'}`}>
+   676→                            due {du}d
+   677→                          </span>
+   678→                        )}
+   679→                      </div>
+   680→                    </div>
+   681→                    <Btn size="sm" onClick={() => addReadingBlock(f)}>
+   682→                      30m
+   683→                    </Btn>
+   684→                  </div>
+   685→                );
+   686→              })}
+   687→            </div>
+   688→          ) : (
+   689→            <div className="plan-side-empty">No reading goals right now.</div>
+   690→          )}
+   691→        </div>
+   692→
+   693→        {/* auto-plan */}
+   694→        <div className="card plan-card">
+   695→          <div className="plan-card-head">
+   696→            <span className="plan-card-title">Auto-plan</span>
+   697→          </div>
+   698→          <p className="plan-autop-note">
+   699→            Greedily schedules suggested work and up to 2 reading blocks, until the day&apos;s capacity
+   700→            is committed.
+   701→          </p>
+   702→          <Btn
+   703→            size="sm"
+   704→            variant="primary"
+   705→            block
+   706→            disabled={(!suggested.length && !readingGoals.length) || plannedMin >= capacity}
+   707→            onClick={autoPlan}
+   708→          >
+   709→            <Wand2 size={13} /> Auto-plan the day
+   710→          </Btn>
+   711→        </div>
+   712→      </div>
+   713→    </div>
+   714→  );
+   715→}
+   716→
+   717→/* ==================== week mode ==================== */
+   718→
+   719→type WeekRow =
+   720→  | { key: string; start: number; kind: 'item'; it: Item }
+   721→  | { key: string; start: number; kind: 'file'; p: FilePlanBlock };
+   722→
+   723→function WeekPlanner({ date, onOpenDay }: { date: string; onOpenDay: (d: string) => void }) {
+   724→  const items = useWB((s) => s.items);
+   725→  const files = useWB((s) => s.files);
+   726→  const filePlans = useWB((s) => s.filePlans);
+   727→  const updateItem = useWB((s) => s.updateItem);
+   728→  const updateFilePlan = useWB((s) => s.updateFilePlan);
+   729→  const deleteFilePlan = useWB((s) => s.deleteFilePlan);
+   730→  const snapshot = useWB((s) => s.snapshot);
+   731→  const { openItemDetail } = useViewActions();
+   732→
+   733→  const today = todayStr();
+   734→  const weekStart = useMemo(() => startOfWeekStr(parseDate(date)), [date]);
+   735→  const days = useMemo(() => Array.from({ length: 7 }, (_, i) => addDaysStr(weekStart, i)), [weekStart]);
+   736→  const fileById = useMemo(() => new Map(files.map((f) => [f.id, f])), [files]);
+   737→
+   738→  const perDay = useMemo(
+   739→    () =>
+   740→      days.map((d) => {
+   741→        const tb = wbTimeboxedItems(items, d);
+   742→        const fb = wbFilePlansForDate(filePlans, d);
+   743→        const dueItems = items.filter(
+   744→          (i) => i.deadline === d && i.status !== 'done' && i.status !== 'archived'
+   745→        );
+   746→        const dueFiles = files.filter((f) => f.deadline === d && !f.archived);
+   747→        const itemMin = tb.reduce((s, i) => s + timeboxDurMin(i), 0);
+   748→        const fileMin = fb.reduce((s, p) => s + p.minutes, 0);
+   749→        return { d, tb, fb, dueItems, dueFiles, itemMin, fileMin };
+   750→      }),
+   751→    [days, items, files, filePlans]
+   752→  );
+   753→
+   754→  const maxDayMin = Math.max(1, ...perDay.map((p) => p.itemMin + p.fileMin));
+   755→  const totItem = perDay.reduce((s, p) => s + p.itemMin, 0);
+   756→  const totFile = perDay.reduce((s, p) => s + p.fileMin, 0);
+   757→
+   758→  const shiftTimebox = (it: Item, d: string, delta: number) => {
+   759→    if (!it.plannedStart) return;
+   760→    const startMin = plannedStartToMin(it.plannedStart);
+   761→    const dur = timeboxDurMin(it);
+   762→    const nd = addDaysStr(d, delta);
+   763→    updateItem(
+   764→      it.id,
+   765→      {
+   766→        plannedStart: dateTimeFromMin(nd, startMin),
+   767→        plannedEnd: dateTimeFromMin(nd, startMin + dur),
+   768→        startDate: nd,
+   769→      },
+   770→      { snapshot: true }
+   771→    );
+   772→  };
+   773→
+   774→  const shiftFilePlan = (p: FilePlanBlock, delta: number) => {
+   775→    snapshot();
+   776→    updateFilePlan(p.id, { date: addDaysStr(p.date, delta) });
+   777→  };
+   778→
+   779→  return (
+   780→    <div className="plan-week">
+   781→      <div className="plan-wk-head">
+   782→        {perDay.map(({ d }) => (
+   783→          <button
+   784→            key={d}
+   785→            type="button"
+   786→            className={`plan-wk-dayhead${d === today ? ' today' : ''}`}
+   787→            onClick={() => onOpenDay(d)}
+   788→            title={`Open ${fmtDateNice(d)} in Day view`}
+   789→          >
+   790→            <span className="plan-wk-dow">
+   791→              {parseDate(d).toLocaleDateString(undefined, { weekday: 'short' })}
+   792→            </span>
+   793→            <span className="plan-wk-num mono">{parseDate(d).getDate()}</span>
+   794→          </button>
+   795→        ))}
+   796→      </div>
+   797→
+   798→      <div className="plan-wk-cols">
+   799→        {perDay.map(({ d, tb, fb, dueItems, dueFiles }) => {
+   800→          const rows: WeekRow[] = [
+   801→            ...tb.map(
+   802→              (it): WeekRow => ({
+   803→                key: `i${it.id}`,
+   804→                start: plannedStartToMin(it.plannedStart ?? ''),
+   805→                kind: 'item',
+   806→                it,
+   807→              })
+   808→            ),
+   809→            ...fb.map(
+   810→              (p): WeekRow => ({ key: `f${p.id}`, start: p.startMin, kind: 'file', p })
+   811→            ),
+   812→          ].sort((a, b) => a.start - b.start);
+   813→          const empty = !rows.length && !dueItems.length && !dueFiles.length;
+   814→          return (
+   815→            <div key={d} className={`plan-wk-col plan-scroll${d === today ? ' today' : ''}`}>
+   816→              <div className="plan-wk-all">
+   817→                {dueItems.map((it) => (
+   818→                  <button
+   819→                    key={it.id}
+   820→                    type="button"
+   821→                    className={`plan-wk-due${d < today ? ' past' : ''}`}
+   822→                    onClick={() => openItemDetail(it.id)}
+   823→                    title={`${it.title} — deadline`}
+   824→                  >
+   825→                    {it.title}
+   826→                  </button>
+   827→                ))}
+   828→                {dueFiles.map((f) => (
+   829→                  <button
+   830→                    key={f.id}
+   831→                    type="button"
+   832→                    className="plan-wk-due file"
+   833→                    onClick={() =>
+   834→                      window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: f.id }))
+   835→                    }
+   836→                    title={`${f.title} — reading deadline`}
+   837→                  >
+   838→                    {f.title}
+   839→                  </button>
+   840→                ))}
+   841→              </div>
+   842→              <div className="plan-wk-rows">
+   843→                {rows.map((row) =>
+   844→                  row.kind === 'item' ? (
+   845→                    <div
+   846→                      key={row.key}
+   847→                      className={`plan-wk-row${row.it.status === 'done' ? ' done' : ''}`}
+   848→                      role="button"
+   849→                      tabIndex={0}
+   850→                      onClick={() => openItemDetail(row.it.id)}
+   851→                      onKeyDown={(e) => {
+   852→                        if (e.key === 'Enter' || e.key === ' ') {
+   853→                          e.preventDefault();
+   854→                          openItemDetail(row.it.id);
+   855→                        }
+   856→                      }}
+   857→                    >
+   858→                      <span className="plan-dot pine" aria-hidden />
+   859→                      <span className="mono plan-wk-time">{(row.it.plannedStart ?? '').slice(11, 16)}</span>
+   860→                      <span className="plan-wk-label">{row.it.title}</span>
+   861→                      <span className="plan-wk-moves">
+   862→                        <button
+   863→                          type="button"
+   864→                          title="Move one day earlier"
+   865→                          aria-label="Move one day earlier"
+   866→                          onClick={(e) => {
+   867→                            e.stopPropagation();
+   868→                            shiftTimebox(row.it, d, -1);
+   869→                          }}
+   870→                        >
+   871→                          <ChevronLeft size={12} />
+   872→                        </button>
+   873→                        <button
+   874→                          type="button"
+   875→                          title="Move one day later"
+   876→                          aria-label="Move one day later"
+   877→                          onClick={(e) => {
+   878→                            e.stopPropagation();
+   879→                            shiftTimebox(row.it, d, 1);
+   880→                          }}
+   881→                        >
+   882→                          <ChevronRight size={12} />
+   883→                        </button>
+   884→                      </span>
+   885→                    </div>
+   886→                  ) : (
+   887→                    <div
+   888→                      key={row.key}
+   889→                      className={`plan-wk-row${row.p.done ? ' done' : ''}`}
+   890→                      role="button"
+   891→                      tabIndex={0}
+   892→                      onClick={() =>
+   893→                        window.dispatchEvent(
+   894→                          new CustomEvent('wb-open-reader', { detail: row.p.fileId })
+   895→                        )
+   896→                      }
+   897→                      onKeyDown={(e) => {
+   898→                        if (e.key === 'Enter' || e.key === ' ') {
+   899→                          e.preventDefault();
+   900→                          window.dispatchEvent(
+   901→                            new CustomEvent('wb-open-reader', { detail: row.p.fileId })
+   902→                          );
+   903→                        }
+   904→                      }}
+   905→                    >
+   906→                      <span className="plan-dot violet" aria-hidden />
+   907→                      <span className="mono plan-wk-time">{minToHHMM(row.p.startMin)}</span>
+   908→                      <span className="plan-wk-label">
+   909→                        {fileById.get(row.p.fileId)?.title || 'Removed file'}
+   910→                      </span>
+   911→                      <span className="plan-wk-moves">
+   912→                        <button
+   913→                          type="button"
+   914→                          title="Move one day earlier"
+   915→                          aria-label="Move one day earlier"
+   916→                          onClick={(e) => {
+   917→                            e.stopPropagation();
+   918→                            shiftFilePlan(row.p, -1);
+   919→                          }}
+   920→                        >
+   921→                          <ChevronLeft size={12} />
+   922→                        </button>
+   923→                        <button
+   924→                          type="button"
+   925→                          title="Move one day later"
+   926→                          aria-label="Move one day later"
+   927→                          onClick={(e) => {
+   928→                            e.stopPropagation();
+   929→                            shiftFilePlan(row.p, 1);
+   930→                          }}
+   931→                        >
+   932→                          <ChevronRight size={12} />
+   933→                        </button>
+   934→                        <button
+   935→                          type="button"
+   936→                          className="plan-wk-x"
+   937→                          title="Remove reading block"
+   938→                          aria-label="Remove reading block"
+   939→                          onClick={(e) => {
+   940→                            e.stopPropagation();
+   941→                            deleteFilePlan(row.p.id);
+   942→                          }}
+   943→                        >
+   944→                          <X size={11} />
+   945→                        </button>
+   946→                      </span>
+   947→                    </div>
+   948→                  )
+   949→                )}
+   950→                {empty && <div className="plan-wk-free">—</div>}
+   951→              </div>
+   952→            </div>
+   953→          );
+   954→        })}
+   955→      </div>
+   956→
+   957→      {/* week footer — planned minutes per day */}
+   958→      <div className="card plan-wk-foot">
+   959→        <div
+   960→          className="plan-wk-bars"
+   961→          role="img"
+   962→          aria-label={`Planned minutes per day this week, total ${fmtDuration(totItem + totFile)}`}
+   963→        >
+   964→          {perDay.map(({ d, itemMin, fileMin }) => {
+   965→            const tot = itemMin + fileMin;
+   966→            return (
+   967→              <div
+   968→                key={d}
+   969→                className={`plan-wk-bar-col${d === today ? ' today' : ''}`}
+   970→                title={`${fmtDateNice(d)} · ${fmtDuration(tot)}`}
+   971→              >
+   972→                <div className="plan-wk-bar">
+   973→                  {tot > 0 && (
+   974→                    <span style={{ height: `${Math.max(6, (tot / maxDayMin) * 100)}%` }}>
+   975→                      <i className="bi" style={{ flexGrow: Math.max(itemMin, 0.001) }} />
+   976→                      <i className="bf" style={{ flexGrow: Math.max(fileMin, 0.001) }} />
+   977→                    </span>
+   978→                  )}
+   979→                </div>
+   980→                <span className="plan-wk-bar-l">
+   981→                  {parseDate(d).toLocaleDateString(undefined, { weekday: 'narrow' })}
+   982→                </span>
+   983→              </div>
+   984→            );
+   985→          })}
+   986→        </div>
+   987→        <div className="mono plan-wk-totals">
+   988→          Planned {fmtDuration(totItem)} · Reading {fmtDuration(totFile)}
+   989→        </div>
+   990→      </div>
+   991→    </div>
+   992→  );
+   993→}
+   994→

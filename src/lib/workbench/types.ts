@@ -108,6 +108,22 @@ export interface ActiveTimer {
 
 export type FileCoverMode = 'page' | 'custom';
 
+/** Library folder — user-created grouping for shelf organization (nested tree). */
+export interface LibraryFolder {
+  id: string;
+  name: string;
+  color: string;
+  icon: string; // FOLDER_ICONS key
+  parentId: string | null; // nested subfolders
+  createdAt: string;
+}
+
+export const FOLDER_ICONS = [
+  'folder', 'book', 'graduation', 'flask', 'calculator', 'code',
+  'music', 'globe', 'star', 'archive', 'pen', 'brain',
+] as const;
+export type FolderIcon = (typeof FOLDER_ICONS)[number];
+
 export interface ResourceFile {
   id: string;
   title: string;
@@ -124,9 +140,50 @@ export interface ResourceFile {
   currentPage: number; // 1-based reading position
   pageSeconds: Record<string, number>; // page number -> accumulated seconds
   readPages: string[]; // manually marked read page ids
+  favoritePages: string[]; // starred pages (simple / review collections)
+  annoPages: string[]; // pages carrying pen/highlight annotations (IDB mirror)
+  folderId: string | null; // library folder
   lastReadAt: string | null;
   archived: boolean;
 }
+
+/* ---------- v5: PDF annotations (pen / highlight / eraser) ---------- */
+
+export type AnnoTool = 'pen' | 'highlight';
+
+/** A freehand stroke, normalized to page dimensions (0..1) so it survives zoom. */
+export interface Stroke {
+  id: string;
+  tool: AnnoTool;
+  color: string;
+  width: number; // px at 1000px reference page width
+  opacity: number; // 0..1 (highlights render translucent)
+  points: number[]; // flattened [x0,y0,x1,y1,...] normalized 0..1
+  createdAt: number;
+}
+
+/** page number (string) -> strokes. Persisted per file in IndexedDB. */
+export type PageAnnoMap = Record<string, Stroke[]>;
+
+/* ---------- v5: reader preferences ---------- */
+
+export type ReaderViewMode = 'single' | 'scroll';
+export type ReaderTool = 'select' | 'pen' | 'highlight' | 'eraser';
+export type ReaderThemeMode = 'light' | 'dark' | 'warm' | 'custom';
+
+export interface ReaderPrefs {
+  viewMode: ReaderViewMode;
+  tool: ReaderTool;
+  themeMode: ReaderThemeMode;
+  custom: { brightness: number; contrast: number; sepia: number }; // percent, 100 = neutral
+  penColor: string;
+  penWidth: number; // px
+  hlColor: string;
+  hlWidth: number; // px
+}
+
+export const HL_SWATCHES = ['#FDE68A', '#86EFAC', '#93C5FD', '#F9A8D4', '#FDBA74', '#C4B5FD'];
+export const PEN_SWATCHES = ['#FB7185', '#FBBF24', '#34D399', '#22D3EE', '#A78BFA', '#F8FAFC'];
 
 export interface ReadingSession {
   id: string;
@@ -184,9 +241,28 @@ export interface Roadmap {
 }
 
 export type GraphView = 'tree' | 'kanban' | 'matrix';
-export type ReportRange = 'today' | 'week' | 'month' | 'all';
+export type ReportRange =
+  | 'today' | 'last3' | 'last7' | 'week' | 'month' | 'last30'
+  | 'year' | 'lastyear' | 'all' | 'custom';
+export interface ReportCustomRange { from: string; to: string }
 export type CalendarSystem = 'gregorian' | 'shamsi';
-export type ClockType = 'analog' | 'digital' | 'minimal' | 'flip';
+export type ClockType = 'aura' | 'orbit' | 'cards' | 'typo';
+
+/* v6 — focus mode clock configuration: size / position / accent color */
+export interface FocusClockCfg {
+  size: number; // 60..170 (percent of base clock size)
+  xPct: number; // 0..100 horizontal center position
+  yPct: number; // 0..100 vertical center position
+  accent: string; // 'auto' | hex color
+}
+
+/* v6 — user-uploaded focus backgrounds (downscaled dataURLs) */
+export interface FocusCustomBg {
+  id: string;
+  label: string;
+  dataUrl: string;
+  accent: string; // dominant color extracted at upload time
+}
 
 export interface FocusTiming {
   phaseLabel: string;
@@ -201,9 +277,28 @@ export const SWATCHES = [
   '#65A30D', '#EA580C', '#4F46E5', '#14B8A6', '#9333EA',
 ];
 
+export const FOLDER_SWATCHES = [
+  '#0F766E', '#D97706', '#7C3AED', '#DB2777', '#0891B2',
+  '#65A30D', '#EA580C', '#9333EA',
+];
+
+/* Photo atmospheres shipped in /public/focus-bg (switchable in the focus panel). */
 export const FOCUS_BACKGROUNDS = [
-  'aurora', 'flow', 'nebula', 'grid', 'stars', 'solid', 'paper', 'ember', 'midnight',
+  'aurora', 'forest', 'sea', 'village', 'desert', 'sky', 'stars', 'night',
 ] as const;
+
+export type FocusBackgroundId = (typeof FOCUS_BACKGROUNDS)[number];
+
+export const FOCUS_BG_META: { id: FocusBackgroundId; label: string; photo: string | null; accent: string }[] = [
+  { id: 'aurora', label: 'Aurora', photo: null, accent: '#2DD4BF' },
+  { id: 'forest', label: 'Forest', photo: '/focus-bg/forest.png', accent: '#4ADE80' },
+  { id: 'sea', label: 'Sea', photo: '/focus-bg/sea.png', accent: '#22D3EE' },
+  { id: 'village', label: 'Village', photo: '/focus-bg/village.png', accent: '#FBBF24' },
+  { id: 'desert', label: 'Desert', photo: '/focus-bg/desert.png', accent: '#F59E0B' },
+  { id: 'sky', label: 'Sky', photo: '/focus-bg/sky.png', accent: '#93C5FD' },
+  { id: 'stars', label: 'Star sky', photo: '/focus-bg/stars.png', accent: '#A5B4FC' },
+  { id: 'night', label: 'Night sky', photo: '/focus-bg/night.png', accent: '#818CF8' },
+];
 
 export const FOCUS_PRESETS = [
   { id: '25', label: 'Deep', workMin: 25, breakMin: 5 },

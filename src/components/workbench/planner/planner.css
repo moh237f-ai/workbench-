@@ -19,17 +19,57 @@
   background-clip: padding-box;
 }
 
-/* ---------- nav bar ---------- */
+/* ---------- nav bar → compact date navigation ---------- */
 .plan-nav {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px 16px;
   flex-wrap: wrap;
   margin-bottom: 14px;
 }
-.plan-nav-title { font-size: 19px; font-weight: 750; }
-.plan-nav-actions { display: flex; align-items: center; gap: 6px; }
+.plan-datebar { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.plan-datebar-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  margin: 0 4px;
+}
+.plan-datebar-label > span:first-child {
+  font-size: 15.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-datebar-badge {
+  padding: 2.5px 9px;
+  border-radius: 99px;
+  background: var(--pine-light);
+  color: var(--pine);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.plan-datebar-aux { display: flex; align-items: center; gap: 8px; }
+.plan-today-chip {
+  height: 38px;
+  padding: 0 15px;
+  border: 1px solid color-mix(in srgb, var(--pine) 32%, var(--hairline));
+  border-radius: 99px;
+  background: var(--pine-light);
+  color: var(--pine);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.15s var(--ease);
+}
+.plan-today-chip:hover { border-color: var(--pine); filter: brightness(1.02); }
+.plan-today-chip:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
 
 /* ---------- day grid: timeline + backlog ---------- */
 .plan-day-grid {
@@ -43,6 +83,8 @@
 .plan-tl-card { padding: 14px 16px 12px; }
 .plan-tl-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
 .plan-tl-count { font-size: 12.5px; font-weight: 650; color: var(--muted2); }
+.plan-head-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.plan-done-chip { font-size: 10.5px; font-weight: 700; }
 
 .plan-tl-scroll {
   max-height: 72vh;
@@ -66,6 +108,10 @@
   border-left: 1px solid var(--hairline);
   border-radius: 0 10px 10px 0;
   background: color-mix(in srgb, var(--surface-solid) 40%, transparent);
+  cursor: copy;
+}
+.plan-tl-lanes.droptarget {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--pine) 35%, transparent);
 }
 .plan-hour-line {
   position: absolute;
@@ -168,6 +214,34 @@
 .plan-block-file .plan-block-time,
 .plan-block-file .plan-block-title { padding-right: 46px; }
 
+/* overlap flag (coral dashed outline + corner icon) */
+.plan-block.plan-overlap {
+  outline: 2px dashed color-mix(in srgb, var(--coral) 72%, transparent);
+  outline-offset: -2px;
+}
+.plan-overlap-ico {
+  position: absolute;
+  right: 7px;
+  bottom: 5px;
+  display: grid;
+  place-items: center;
+  padding: 1.5px;
+  border-radius: 5px;
+  color: var(--coral);
+  background: color-mix(in srgb, var(--surface-solid) 72%, transparent);
+}
+
+/* pool-drag ghost block */
+.plan-ghost {
+  z-index: 9;
+  opacity: 0.78;
+  pointer-events: none;
+  border: 1.5px dashed var(--pine);
+  background: var(--pine-light);
+  cursor: grabbing;
+}
+.plan-ghost-file { border-color: var(--violet); background: var(--violet-light); }
+
 /* resize handle */
 .plan-block-resize {
   position: absolute;
@@ -262,6 +336,55 @@
 }
 .plan-cap-num { font-size: 11.5px; font-weight: 700; color: var(--muted2); }
 
+/* up next card */
+.plan-un-row {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-solid) 55%, transparent);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.plan-un-row:hover { border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline)); box-shadow: var(--shadow-sm); }
+.plan-un-row:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
+.plan-un-main { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.plan-un-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted2);
+}
+.plan-un-title {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-un-meta { font-size: 11px; font-weight: 600; color: var(--muted2); }
+.plan-un-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--pine);
+  flex-shrink: 0;
+  animation: planPulse 1.8s var(--ease) infinite;
+}
+.plan-un-go { color: var(--faint); flex-shrink: 0; transition: color 0.15s var(--ease); }
+.plan-un-row:hover .plan-un-go { color: var(--pine); }
+.plan-un-empty { padding: 12px 4px; font-size: 12.5px; color: var(--faint); text-align: center; }
+@keyframes planPulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pine) 45%, transparent); }
+  70% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--pine) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pine) 0%, transparent); }
+}
+
 /* capacity meter */
 .plan-meter {
   height: 10px;
@@ -280,6 +403,9 @@
 .plan-meter.over > span { background: linear-gradient(90deg, var(--coral), var(--amber)); }
 .plan-meter-note { margin-top: 7px; font-size: 11.5px; color: var(--muted2); }
 .plan-meter-note.over { color: var(--coral); font-weight: 650; }
+.plan-meter-sm { height: 5px; }
+.plan-free { display: flex; align-items: center; gap: 9px; margin-top: 9px; }
+.plan-free-lab { font-size: 11px; font-weight: 650; color: var(--muted2); white-space: nowrap; }
 
 /* suggested / reading rows */
 .plan-sug-list {
@@ -299,9 +425,30 @@
   border: 1px solid var(--hairline);
   border-radius: 12px;
   background: color-mix(in srgb, var(--surface-solid) 55%, transparent);
-  transition: border-color 0.15s var(--ease);
+  transition: border-color 0.15s var(--ease), opacity 0.15s var(--ease);
 }
 .plan-sug-row:hover { border-color: color-mix(in srgb, var(--pine) 28%, var(--hairline)); }
+.plan-sug-row.dragging { opacity: 0.5; }
+.plan-sug-grip {
+  width: 24px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--faint);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s;
+}
+.plan-sug-grip:hover { color: var(--pine); background: var(--surface-alt); }
+.plan-sug-grip:active { cursor: grabbing; }
+.plan-sug-grip:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
 .plan-read-ico { color: var(--violet); flex-shrink: 0; }
 .plan-sug-main { min-width: 0; flex: 1; display: grid; gap: 4px; }
 .plan-sug-title {
@@ -358,6 +505,7 @@
 .plan-wk-dayhead.today .plan-wk-dow { color: var(--pine); }
 .plan-wk-num { font-size: 15px; font-weight: 750; color: var(--ink); }
 .plan-wk-dayhead.today .plan-wk-num { color: var(--pine); }
+.plan-wk-daytotal { font-size: 10px; font-weight: 650; color: var(--muted2); }
 
 .plan-wk-cols {
   display: grid;
@@ -376,8 +524,14 @@
   border: 1px solid var(--hairline);
   border-radius: 12px;
   background: var(--surface);
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
 }
 .plan-wk-col.today { border-color: color-mix(in srgb, var(--pine) 36%, var(--hairline)); }
+.plan-wk-col.drop {
+  border-color: var(--pine);
+  background: var(--pine-light);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pine) 40%, transparent);
+}
 
 /* all-day due chips */
 .plan-wk-all { display: grid; gap: 4px; }
@@ -414,10 +568,13 @@
   border-radius: 8px;
   cursor: pointer;
 }
+.plan-wk-row[draggable='true'] { cursor: grab; }
+.plan-wk-row[draggable='true']:active { cursor: grabbing; }
 .plan-wk-row:hover {
   background: var(--surface-alt);
   border-color: var(--hairline);
 }
+.plan-wk-row:focus-visible { outline: 2px solid var(--pine); outline-offset: -1px; }
 .plan-wk-row.done .plan-wk-label { text-decoration: line-through; opacity: 0.6; }
 .plan-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .plan-dot.pine { background: var(--pine); }
@@ -524,13 +681,26 @@
   .plan-wk-cols { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .plan-wk-col { min-height: 240px; max-height: 46vh; }
   .plan-tl-scroll { max-height: 62vh; }
+  .plan-datebar-label > span:first-child { font-size: 14.5px; }
 }
 
-/* touch devices: no hover — keep controls visible */
+@media (max-width: 640px) {
+  .plan-wk-daytotal { display: none; }
+  .plan-today-chip { padding: 0 12px; }
+}
+
+/* touch devices: no hover — keep controls visible, bigger targets */
 @media (hover: none) {
   .plan-x { opacity: 1; }
   .plan-block-resize { opacity: 0.85; }
   .plan-wk-moves { opacity: 1; }
+}
+
+@media (pointer: coarse) {
+  .plan-datebar .icon-btn,
+  .plan-head-actions .icon-btn { width: 44px; height: 44px; }
+  .plan-today-chip { height: 44px; }
+  .plan-sug-grip { width: 44px; }
 }
 
 /* ---------- reduced motion ---------- */
@@ -538,6 +708,608 @@
   .plan-block,
   .plan-meter > span,
   .plan-wk-moves,
-  .plan-wk-dayhead { transition: none; }
+  .plan-wk-dayhead,
+  .plan-wk-col { transition: none; }
   .plan-wk-dayhead:hover { transform: none; }
+  .plan-un-dot { animation: none; }
+}
+
+/* ================================================================
+   v3 — add-block panel · goals & roadmaps bridge · habit strip
+   ================================================================ */
+
+/* ---------- backdrop + wide panel (portaled to body) ---------- */
+.plan-add-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  background: rgba(6, 12, 9, 0.28);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+  animation: planFadeIn 0.16s ease-out;
+}
+.plan-add {
+  position: fixed;
+  z-index: 250;
+  width: min(420px, 92vw);
+  max-height: min(88vh, 720px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 20px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-lg);
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  outline: none;
+  animation: planAddIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes planAddIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes planFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes planSheetIn {
+  from { opacity: 0.5; transform: translateY(48px); }
+  to { opacity: 1; transform: none; }
+}
+
+.plan-add-head { display: flex; align-items: center; gap: 10px; }
+.plan-add-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sora), var(--font-inter), sans-serif;
+  font-size: 15.5px;
+  font-weight: 750;
+  letter-spacing: -0.01em;
+}
+.plan-add-x {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+.plan-add-x:hover { background: var(--coral-light); color: var(--coral); }
+.plan-add-x:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+
+/* live summary chip (date · range · duration) */
+.plan-add-sum {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: start;
+  padding: 6px 11px;
+  border-radius: 9px;
+  background: var(--pine-light);
+  color: var(--pine);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+/* sections + micro labels */
+.plan-add-sec { display: grid; gap: 9px; }
+.plan-add-lab {
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted2);
+}
+.plan-add-lab-alt {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--faint);
+}
+
+/* title input (spacious) */
+.plan-add-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 13px;
+  border: 1px solid var(--hairline);
+  border-radius: 11px;
+  background: var(--surface-alt);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  outline: none;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.plan-add-input::placeholder { color: var(--faint); font-weight: 500; }
+.plan-add-input:focus { border-color: var(--pine); box-shadow: 0 0 0 3px var(--pine-light); }
+
+/* picked-task card (replaces the title input once a task is chosen) */
+.plan-add-sel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--pine) 35%, var(--hairline));
+  border-radius: 12px;
+  background: var(--pine-light);
+}
+.plan-add-sel-ico { color: var(--pine); flex-shrink: 0; }
+.plan-add-sel-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.plan-add-sel-title {
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-add-sel-chips { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.plan-add-sel-chips .chip { font-size: 10px; padding: 2px 7px; }
+.plan-add-sel-x {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted2);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.12s;
+}
+.plan-add-sel-x:hover { background: var(--coral-light); color: var(--coral); }
+.plan-add-sel-x:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+
+/* time row */
+.plan-add-timerow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plan-add-timelab { font-size: 11.5px; font-weight: 650; color: var(--muted2); }
+.plan-add-time {
+  height: 38px;
+  padding: 0 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+  color-scheme: light;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.plan-add-time:hover { border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline)); }
+.plan-add-time:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+.dark .plan-add-time,
+.prism .plan-add-time { color-scheme: dark; }
+.plan-add-arrow { color: var(--faint); font-weight: 700; }
+
+/* duration: segmented presets + custom stepper */
+.plan-add-dur { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.plan-add-step { display: inline-flex; align-items: center; gap: 4px; }
+.plan-add-step button {
+  width: 30px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--surface-alt);
+  color: var(--muted2);
+  cursor: pointer;
+  transition: all 0.12s var(--ease);
+}
+.plan-add-step button:hover {
+  color: var(--pine);
+  border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline));
+}
+.plan-add-step button:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+.plan-add-step input {
+  width: 58px;
+  height: 34px;
+  padding: 0 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--surface-alt);
+  color: var(--ink);
+  font-family: var(--font-jetbrains), monospace;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: center;
+  outline: none;
+  transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.plan-add-step input:focus { border-color: var(--pine); box-shadow: 0 0 0 3px var(--pine-light); }
+.plan-add-step-lab { font-size: 11px; font-weight: 650; color: var(--muted2); }
+
+/* type chooser (2×2, icon + label) */
+.plan-add-types {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.plan-add-type {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  background: var(--surface-alt);
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.14s var(--ease);
+}
+.plan-add-type svg { flex-shrink: 0; }
+.plan-add-type:hover {
+  border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline));
+  color: var(--ink);
+}
+.plan-add-type:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+.plan-add-type.sel {
+  border-color: color-mix(in srgb, var(--pine) 55%, var(--hairline));
+  background: var(--pine-light);
+  color: var(--pine);
+  box-shadow: 0 0 0 2.5px var(--pine-light);
+}
+.plan-add-type[data-k='reading'].sel {
+  border-color: color-mix(in srgb, var(--violet) 55%, var(--hairline));
+  background: var(--violet-light);
+  color: var(--violet);
+  box-shadow: 0 0 0 2.5px var(--violet-light);
+}
+.plan-add-type[data-k='habit'].sel {
+  border-color: color-mix(in srgb, var(--amber) 55%, var(--hairline));
+  background: var(--amber-light);
+  color: var(--amber);
+  box-shadow: 0 0 0 2.5px var(--amber-light);
+}
+
+/* search box + pick lists (enlarged, comfortable rows) */
+.plan-add-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  color: var(--muted2);
+  transition: border-color 0.15s var(--ease);
+}
+.plan-add-search:focus-within { border-color: var(--pine); }
+.plan-add-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.plan-add-search input::placeholder { color: var(--faint); }
+.plan-add-list {
+  display: grid;
+  gap: 5px;
+  max-height: 236px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+.plan-add-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  padding: 7px 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.12s var(--ease);
+}
+.plan-add-row:hover { border-color: color-mix(in srgb, var(--pine) 32%, var(--hairline)); }
+.plan-add-row:focus-visible { outline: 2px solid var(--pine); outline-offset: 1px; }
+.plan-add-row.sel { border-color: var(--pine); background: var(--pine-light); }
+.plan-add-row-ico { color: var(--pine); flex-shrink: 0; }
+.plan-add-row-ico.violet { color: var(--violet); }
+.plan-add-row-main { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.plan-add-row-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-add-row-sub { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.plan-add-row-sub .chip { font-size: 10px; padding: 2px 7px; }
+.plan-add-row-goal {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-add-row-goal svg { flex-shrink: 0; color: var(--faint); }
+.plan-add-none { padding: 12px 4px; font-size: 12px; color: var(--faint); text-align: center; }
+.plan-add-sub { display: grid; gap: 8px; margin-top: 2px; }
+
+/* habit info box inside the panel */
+.plan-add-habit {
+  display: grid;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px dashed color-mix(in srgb, var(--amber) 40%, var(--hairline));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--amber) 7%, transparent);
+}
+.plan-add-habit-ico { color: var(--amber); }
+.plan-add-habit-txt { margin: 0; font-size: 12px; line-height: 1.55; color: var(--muted2); }
+.plan-add-habit-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.plan-add-habit-lab { font-size: 12px; font-weight: 650; color: var(--ink); }
+
+/* foot — sticky so Submit stays reachable while the pick lists scroll */
+.plan-add-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
+  padding: 10px 0 2px;
+  background: linear-gradient(to top, var(--surface-solid) 72%, color-mix(in srgb, var(--surface-solid) 0%, transparent));
+}
+
+/* ---------- side sections: From goals / From roadmaps (collapsible) ---------- */
+.plan-coll { background: var(--surface); }
+.plan-coll-ico { color: var(--pine); flex-shrink: 0; }
+.plan-coll-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-sora), var(--font-inter), sans-serif;
+  font-size: 13.5px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-align: left;
+}
+.plan-coll .wb-coll-body { padding: 0 16px 14px; }
+.plan-src-list { display: grid; gap: 8px; }
+.plan-src-row { display: flex; align-items: center; gap: 8px; }
+.plan-src-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+}
+.plan-src-main:hover .plan-src-title { color: var(--pine); }
+.plan-src-main:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; border-radius: 6px; }
+.plan-src-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color 0.13s var(--ease);
+}
+.plan-src-chips { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.plan-src-chips .chip { font-size: 10px; padding: 2px 7px; }
+.plan-src-next {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-src-next svg { flex-shrink: 0; color: var(--pine); }
+
+/* ---------- habit strip under the day timeline ---------- */
+.plan-hab-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 11px;
+  border: 1px solid var(--hairline);
+  border-radius: 99px;
+  background: var(--surface-alt);
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all 0.14s var(--ease);
+}
+.plan-hab-chip:hover {
+  border-color: color-mix(in srgb, var(--amber) 40%, var(--hairline));
+  color: var(--ink);
+}
+.plan-hab-chip.on {
+  background: var(--amber-light);
+  border-color: color-mix(in srgb, var(--amber) 45%, var(--hairline));
+  color: var(--amber);
+}
+.plan-hab-chip:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+.plan-habits {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+.plan-hab-head { display: flex; align-items: center; gap: 10px; }
+.plan-hab-head-lab {
+  flex: 1;
+  min-width: 0;
+  font-size: 9.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-hab-row { display: flex; align-items: center; gap: 10px; min-height: 34px; }
+.plan-hab-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px; }
+.plan-hab-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.plan-hab-title {
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.plan-hab-days {
+  display: grid;
+  grid-template-columns: repeat(7, 30px);
+  gap: 4px;
+  flex-shrink: 0;
+}
+.plan-hab-hd {
+  display: grid;
+  place-items: center;
+  font-size: 9.5px;
+  font-weight: 750;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.plan-hab-hd.cur { color: var(--amber); }
+.plan-hab-day {
+  position: relative;
+  width: 30px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--surface-alt);
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.13s var(--ease);
+}
+.plan-hab-day:hover { border-color: color-mix(in srgb, var(--amber) 45%, var(--hairline)); }
+.plan-hab-day:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
+.plan-hab-day.done {
+  background: var(--hab, var(--amber));
+  border-color: var(--hab, var(--amber));
+}
+.plan-hab-day.cur { box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 32%, transparent); }
+.plan-hab-day.cur.done {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hab, var(--amber)) 35%, transparent);
+}
+.plan-hab-day.today::after {
+  content: '';
+  position: absolute;
+  bottom: 3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--muted2);
+}
+.plan-hab-day.today.done::after { background: rgba(255, 255, 255, 0.75); }
+.plan-hab-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+  font-size: 12px;
+  color: var(--faint);
+}
+
+/* ---------- v3 responsive & a11y ---------- */
+/* ≤700px: the add panel becomes a bottom sheet (full-width, rounded top, scrollable) */
+@media (max-width: 700px) {
+  .plan-add {
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 80vh !important;
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    animation: planSheetIn 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .plan-add-backdrop { background: rgba(6, 12, 9, 0.4); }
+  .plan-add-sum { align-self: stretch; justify-content: center; }
+  .plan-add-types { gap: 6px; }
+  .plan-hab-days { grid-template-columns: repeat(7, minmax(30px, 1fr)); }
+  .plan-hab-day { width: auto; }
+  .plan-src-row { flex-wrap: wrap; }
+  .plan-src-main { flex-basis: 100%; }
+}
+
+@media (pointer: coarse) {
+  .plan-hab-chip { height: 40px; padding: 0 14px; }
+  .plan-add .seg button { min-height: 44px; }
+  .plan-add-time { height: 44px; }
+  .plan-add-step input { height: 44px; }
+  .plan-add-step button { width: 40px; height: 44px; }
+  .plan-add-row { min-height: 52px; }
+  .plan-add-type { min-height: 52px; }
+  .plan-hab-day { height: 38px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .plan-add,
+  .plan-add-backdrop { animation: none; }
+  .plan-add-type,
+  .plan-add-row,
+  .plan-add-step button,
+  .plan-hab-chip,
+  .plan-hab-day,
+  .plan-src-title { transition: none; }
 }
