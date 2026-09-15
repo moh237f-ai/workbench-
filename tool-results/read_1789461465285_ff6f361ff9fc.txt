@@ -1,0 +1,192 @@
+  2700→    if(map[key]){e.preventDefault();gPressed=false;setView(map[key]);}
+  2701→  }
+  2702→});
+  2703→
+  2704→/* ==================== AURORA SUITE · PHASES 5–15 ==================== */
+  2705→state.suite=Object.assign({xp:0,streak:0,lastReview:null,searchQuery:'',focusSessions:0,focusMinutes:0,smartMode:true,recurrenceSpawns:{}},state.suite||{});
+  2706→state.items.forEach(i=>{i.recurrence=Object.assign({freq:'none',interval:1,weekdays:[],nextDate:null},i.recurrence||{});});
+  2707→
+  2708→function suitePersistFields(){
+  2709→  const basePersist=persist;
+  2710→  persist=function(){
+  2711→    try{ state.items.forEach(i=>{i.recurrence=Object.assign({freq:'none',interval:1,weekdays:[],nextDate:null},i.recurrence||{});});
+  2712→      const old=JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}');
+  2713→      basePersist();
+  2714→      const raw=JSON.parse(localStorage.getItem(STORAGE_KEY)||'{}'); raw.suite=state.suite; raw.items=state.items; localStorage.setItem(STORAGE_KEY,JSON.stringify(raw));
+  2715→    }catch(e){console.error(e);}
+  2716→  };
+  2717→}
+  2718→suitePersistFields();
+  2719→
+  2720→function suitePriorityScore(i){return ({p0:100,p1:70,p2:40,p3:15}[i.priority]||20)+(i.deadline?Math.max(0,20-Math.max(0,daysUntil(i.deadline))*2):0)+(i.nextAction?10:0)+(plannedItemsForDate(todayStr()).some(x=>x.id===i.id)?12:0)-(isBlocked(i)?80:0);}
+  2721→function estimateAccuracy(){
+  2722→  const rows=[];state.entries.forEach(e=>(e.itemIds||[]).forEach(id=>{const i=getItem(id);if(i?.estimateMin&&e.durationMin>0)rows.push({i,e});}));
+  2723→  if(!rows.length)return null;const avg=rows.reduce((s,x)=>s+(x.e.durationMin/x.i.estimateMin),0)/rows.length;return {count:rows.length,ratio:avg,accuracy:Math.max(0,100-Math.round(Math.abs(1-avg)*100))};
+  2724→}
+  2725→function todayScore(){
+  2726→  const planned=plannedItemsForDate(todayStr()),done=planned.filter(i=>computeProgress(i)>=100||i.status==='done').length;
+  2727→  const habits=state.habits.length?state.habits.filter(h=>h.log?.[todayStr()]).length/state.habits.length:1;
+  2728→  const focus=Math.min(1,(entriesInRange(todayStr(),todayStr()).reduce((s,e)=>s+e.durationMin,0))/180);
+  2729→  const schedule=planned.length?done/planned.length:1;
+  2730→  return Math.round((schedule*.55+habits*.2+focus*.25)*100);
+  2731→}
+  2732→function suiteInsights(){
+  2733→  const a=[];const acc=estimateAccuracy();const overdue=state.items.filter(i=>i.deadline&&computeProgress(i)<100&&daysUntil(i.deadline)<0&&!isBlocked(i)).length;
+  2734→  const blocked=state.items.filter(isBlocked).length;const cap=Number(state.dailyCapacityMin)||240;const pm=plannedMinutesForDate(todayStr());
+  2735→  if(overdue)a.push(`${overdue} deadline${overdue===1?' is':'s are'} overdue. Pull the most important one into the next available focus block.`);
+  2736→  if(blocked)a.push(`${blocked} item${blocked===1?' is':'s are'} blocked. Resolve dependencies before adding more work.`);
+  2737→  if(acc&&acc.ratio>1.35)a.push(`Your tracked work is averaging ${Math.round(acc.ratio*100)}% of estimates. Add more realistic buffers to planning.`);
+  2738→  if(acc&&acc.ratio<.7)a.push(`You are finishing tracked work faster than estimates. Tighten estimates gradually instead of filling every spare minute.`);
+  2739→  if(pm>cap)a.push('Today is over capacity. Trim the plan before starting another block.');
+  2740→  if(!a.length)a.push('The system is stable: protect your next action, keep capacity realistic, and log the evidence.');
+  2741→  return a;
+  2742→}
+  2743→function openGlobalSearch(prefill=''){
+  2744→  const body=`<div class="field"><label>Search everything</label><input id="suiteSearchInput" value="${esc(prefill)}" placeholder="Task, goal, journal text, label, habit…" autofocus></div><div id="suiteSearchResults" class="search-results"></div>`;
+  2745→  openModal('Search',body,[{label:'Close',cls:'btn',close:true}]);
+  2746→  const input=$('suiteSearchInput');const run=()=>{$('suiteSearchResults').innerHTML=suiteSearch(input.value)};input.addEventListener('input',run);run();
+  2747→}
+  2748→function suiteSearch(q){
+  2749→  q=q.trim().toLowerCase();if(!q)return '<div class="suite-empty">Type to search tasks, goals, journal entries, habits, labels and notes.</div>';
+  2750→  const rows=[];
+  2751→  state.items.forEach(i=>{const hay=[i.title,i.notes,i.nextAction,i.status].join(' ').toLowerCase();if(hay.includes(q))rows.push({kind:'Task',title:i.title,sub:[i.type,i.status,i.deadline||'no deadline'].join(' · '),action:`openItemDetail('${i.id}')`});});
+  2752→  state.labels.forEach(l=>{if(l.name.toLowerCase().includes(q))rows.push({kind:'Label',title:l.name,sub:`${l.itemIds.length} linked items`,action:`setView('goals')`});});
+  2753→  state.habits.forEach(h=>{if((h.name||'').toLowerCase().includes(q))rows.push({kind:'Habit',title:h.name,sub:`streak ${computeStreak(h.log)}d`,action:`setView('habits')`});});
+  2754→  state.journal.forEach(j=>{if((j.content||'').toLowerCase().includes(q))rows.push({kind:'Journal',title:j.date,sub:(j.content||'').slice(0,120),action:`journalEditingDate='${j.date}';setView('journal')`});});
+  2755→  return rows.slice(0,50).map(r=>`<div class="search-result" onclick="${r.action}"><div><span class="suite-badge">${esc(r.kind)}</span> <strong>${esc(r.title)}</strong></div><div class="suite-muted">${esc(r.sub)}</div></div>`).join('')||'<div class="suite-empty">No matches.</div>';
+  2756→}
+  2757→function openWeeklyReview(){
+  2758→  const to=todayStr(),from=isoDate(new Date(new Date().getTime()-6*86400000));const entries=entriesInRange(from,to),logged=entries.reduce((s,e)=>s+e.durationMin,0);const completed=state.items.filter(i=>i.completedAt&&i.completedAt.slice(0,10)>=from&&i.completedAt.slice(0,10)<=to).length;const habits=state.habits.reduce((s,h)=>s+Object.entries(h.log||{}).filter(([d,v])=>v&&d>=from&&d<=to).length,0);
+  2759→  const body=`<div class="suite-grid"><div class="suite-stat"><div class="suite-muted">Logged</div><div class="n">${fmtDuration(logged)}</div></div><div class="suite-stat"><div class="suite-muted">Completed</div><div class="n">${completed}</div></div><div class="suite-stat"><div class="suite-muted">Habit reps</div><div class="n">${habits}</div></div></div><div style="margin-top:15px" class="suite-insight">${esc(suiteInsights()[0])}</div><div class="review-question"><label>What moved forward?</label><textarea id="reviewWin" placeholder="The work that mattered…"></textarea></div><div class="review-question"><label>What created friction?</label><textarea id="reviewFriction" placeholder="Blockers, unrealistic plans, context switching…"></textarea></div><div class="review-question"><label>What changes next week?</label><textarea id="reviewNext" placeholder="One or two changes only…"></textarea></div>`;
+  2760→  openModal('Weekly review',body,[{label:'Close',cls:'btn',close:true},{label:'Save review',cls:'btn btn-primary',onClick:()=>{const content=`Weekly review\n\nMoved forward: ${$('reviewWin').value.trim()}\n\nFriction: ${$('reviewFriction').value.trim()}\n\nNext week: ${$('reviewNext').value.trim()}`;const ex=state.journal.find(j=>j.date===to);if(ex){ex.content=(ex.content?ex.content+'\n\n':'')+content;ex.updatedAt=new Date().toISOString();}else state.journal.push({id:uid(),date:to,content,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()});state.suite.lastReview=to;recordEvent('weekly_review_saved',{date:to});saveDebounced();closeModal();render();toast('Weekly review saved');}}]);
+  2761→}
+  2762→function openScheduleAssistant(){
+  2763→  const cap=Number(state.dailyCapacityMin)||240;const planned=plannedItemsForDate(todayStr()),used=plannedMinutesForDate(todayStr());const candidates=readyItems().filter(i=>!planned.some(p=>p.id===i.id)).sort((a,b)=>suitePriorityScore(b)-suitePriorityScore(a)).slice(0,12);let remaining=Math.max(0,cap-used);const picks=[];for(const i of candidates){const m=Number(i.estimateMin)||30;if(m<=remaining){picks.push(i);remaining-=m;}}
+  2764→  const body=`<div class="suite-muted">Suggested additions for today, respecting capacity and blocked dependencies.</div><div class="suite-list">${picks.map(i=>`<label class="suite-row"><input type="checkbox" class="suite-schedule-cb" value="${i.id}" checked><div class="suite-row-main"><div class="suite-row-title">${esc(i.title)}</div><div class="suite-row-sub">${i.priority.toUpperCase()} · ${fmtDuration(i.estimateMin||30)}${i.deadline?' · due '+fmtDateNice(i.deadline):''}</div></div></label>`).join('')||'<div class="suite-empty">No additional task fits your remaining capacity.</div>'}</div>`;
+  2765→  openModal('Smart schedule',body,[{label:'Cancel',cls:'btn',close:true},{label:'Apply plan',cls:'btn btn-primary',onClick:()=>{[...document.querySelectorAll('.suite-schedule-cb:checked')].forEach(cb=>{const i=getItem(cb.value);if(i){i.startDate=todayStr();if(i.status==='inbox')i.status='todo';i.updatedAt=new Date().toISOString();recordEvent('item_planned',{itemId:i.id,date:todayStr(),source:'smart_schedule'});}});saveDebounced();closeModal();render();toast('Smart schedule applied');}}]);
+  2766→}
+  2767→function setRecurrence(id){const i=getItem(id);if(!i)return;const r=i.recurrence||{};const body=`<div class="field"><label>Repeat</label><select id="repFreq"><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekdays">Weekdays</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div><div class="field"><label>Interval</label><input id="repInterval" type="number" min="1" max="30" value="${r.interval||1}"></div><div class="suite-muted">When this task is completed, the next occurrence is created automatically.</div>`;openModal('Recurring task',body,[{label:'Cancel',cls:'btn',close:true},{label:'Save recurrence',cls:'btn btn-primary',onClick:()=>{i.recurrence={freq:$('repFreq').value,interval:Math.max(1,Number($('repInterval').value)||1),weekdays:[] ,nextDate:null};recordEvent('recurrence_updated',{itemId:id,freq:i.recurrence.freq,interval:i.recurrence.interval});saveDebounced();closeModal();render();toast(i.recurrence.freq==='none'?'Recurrence removed':'Recurrence saved');}}]);$('repFreq').value=r.freq||'none';}
+  2768→function nextRecurrenceDate(item){const f=item.recurrence?.freq;if(!f||f==='none')return null;const base=parseDate(item.deadline||todayStr());let d=new Date(base);const n=Math.max(1,Number(item.recurrence.interval)||1);if(f==='daily')d.setDate(d.getDate()+n);else if(f==='weekdays'){d.setDate(d.getDate()+1);while([0,6].includes(d.getDay()))d.setDate(d.getDate()+1);}else if(f==='weekly')d.setDate(d.getDate()+7*n);else if(f==='monthly')d.setMonth(d.getMonth()+n);return isoDate(d);}
+  2769→function spawnRecurrence(item){if(!item?.recurrence||item.recurrence.freq==='none'||item.type!=='task')return;const date=nextRecurrenceDate(item);if(!date)return;const key=item.id+'|'+date;if(state.suite.recurrenceSpawns[key])return;state.suite.recurrenceSpawns[key]=1;const n=itemDefaults({...item,id:uid(),title:item.title,status:'todo',manualProgress:0,completedAt:null,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),startDate:null,plannedStart:null,plannedEnd:null,deadline:date,recurrence:{...item.recurrence,nextDate:null},dependsOn:[],parentId:item.parentId});state.items.push(n);recordEvent('recurrence_spawned',{sourceItemId:item.id,itemId:n.id,date});}
+  2770→const _recordEventSuite=recordEvent;recordEvent=function(type,payload={}){_recordEventSuite(type,payload);if(type==='item_updated'&&payload.itemId){const it=getItem(payload.itemId);if(it?.status==='done')spawnRecurrence(it);} if(type==='focus_ended'&&payload.durationMin){state.suite.focusSessions++;state.suite.focusMinutes+=payload.durationMin;state.suite.xp+=Math.round(payload.durationMin/5);}};
+  2771→const _stopTimerSuite=stopTimer;stopTimer=function(){const id=state.activeTimer?.itemIds?.[0],started=state.activeTimer?.startedAt;_stopTimerSuite();if(id&&started){const mins=Math.max(1,Math.round((Date.now()-new Date(started).getTime())/60000));recordEvent('focus_ended',{itemId:id,durationMin:mins});state.suite.xp+=Math.max(1,Math.round(mins/5));saveDebounced();}};
+  2772→const _startItemFocusSuite=startItemFocus;startItemFocus=function(id){const i=getItem(id);if(i&&isBlocked(i)){toast('This task is blocked', {description:dependencyLabel(i)});return;}state.suite.lastFocusItem=id;_startItemFocusSuite(id);recordEvent('focus_started',{itemId:id,source:'task'});};
+  2773→function openIntegrations(){
+  2774→  const body=`<div class="suite-list"><div class="suite-row"><div class="suite-row-main"><div class="suite-row-title">JSON backup</div><div class="suite-row-sub">Portable snapshot for moving your workspace.</div></div><button class="suite-btn" data-suite="export-json">Export</button><button class="suite-btn" data-suite="import-json">Import</button></div><div class="suite-row"><div class="suite-row-main"><div class="suite-row-title">Calendar integration</div><div class="suite-row-sub">Export scheduled timeboxes as an .ics calendar file.</div></div><button class="suite-btn" data-suite="export-ics">Export ICS</button></div></div>`;
+  2775→  openModal('Sync & integrations',body,[{label:'Done',cls:'btn btn-primary',close:true}]);
+  2776→}
+  2777→function exportJSONSuite(){const blob=new Blob([JSON.stringify({schemaVersion:SCHEMA_VERSION,items:state.items,labels:state.labels,entries:state.entries,events:state.events,habits:state.habits,journal:state.journal,suite:state.suite},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='workbench-aurora-'+todayStr()+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500);toast('Workspace exported');}
+  2778→function importJSONSuite(){const input=document.createElement('input');input.type='file';input.accept='application/json,.json';input.onchange=()=>{const f=input.files?.[0];if(!f)return;const fr=new FileReader();fr.onload=()=>{try{const raw=JSON.parse(fr.result);if(!raw||!Array.isArray(raw.items))throw new Error('Invalid backup');if(!confirm('Replace the current workspace with this backup?'))return;state=migrateState(raw);state.suite=Object.assign({xp:0,streak:0,lastReview:null,searchQuery:'',focusSessions:0,focusMinutes:0,smartMode:true,recurrenceSpawns:{}},raw.suite||{});saveDebounced();render();toast('Backup imported');}catch(e){toast('Import failed',{description:e.message});}};fr.readAsText(f);};input.click();}
+  2779→function exportICSSuite(){const events=[];state.items.filter(i=>i.plannedStart&&i.plannedEnd).forEach(i=>events.push(`BEGIN:VEVENT\nUID:${i.id}@workbench\nDTSTART:${i.plannedStart.replace(/[-:]/g,'')}\nDTEND:${i.plannedEnd.replace(/[-:]/g,'')}\nSUMMARY:${(i.title||'Task').replace(/[,;]/g,'\\,')}\nDESCRIPTION:${(i.nextAction||i.notes||'').replace(/\n/g,' ')}\nEND:VEVENT`));const ics=`BEGIN:VCALENDAR\nVERSION:2.0\nPRODID:-//Workbench Aurora//EN\n${events.join('\n')}\nEND:VCALENDAR`;const blob=new Blob([ics],{type:'text/calendar'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='workbench-timeblocks-'+todayStr()+'.ics';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),500);toast('ICS calendar exported');}
+  2780→function renderSuiteStrip(){
+  2781→  const score=todayScore(),acc=estimateAccuracy();return `<div class="suite-panel" style="margin-top:18px"><div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap"><div><div class="suite-card-title">Aurora intelligence</div><div class="suite-muted">Execution signals from your actual work.</div></div><div class="suite-toolbar"><button class="suite-btn" data-suite="search">Search</button><button class="suite-btn" data-suite="review">Weekly review</button><button class="suite-btn" data-suite="schedule">Smart schedule</button><button class="suite-btn" data-suite="integrations">Sync / export</button></div></div><div class="suite-grid" style="margin-top:12px"><div class="suite-stat"><div class="suite-muted">Today score</div><div class="suite-score">${score}</div><div class="suite-muted">planning + habits + focus</div></div><div class="suite-stat"><div class="suite-muted">Focus tracked</div><div class="n">${fmtDuration(state.suite.focusMinutes||0)}</div><div class="suite-muted">${state.suite.focusSessions||0} sessions</div></div><div class="suite-stat"><div class="suite-muted">Estimate accuracy</div><div class="n">${acc?acc.accuracy+'%':'—'}</div><div class="suite-muted">${acc?acc.count+' linked entries':'Need linked task time'}</div></div></div><div style="margin-top:12px;display:grid;gap:7px">${suiteInsights().slice(0,3).map(x=>`<div class="suite-insight">${esc(x)}</div>`).join('')}</div></div>`;
+  2782→}
+  2783→const _renderDashboardSuite=renderDashboard;renderDashboard=function(root){_renderDashboardSuite(root);root.insertAdjacentHTML('beforeend',renderSuiteStrip());};
+  2784→const _renderTodaySuite=renderToday;renderToday=function(root){_renderTodaySuite(root);root.insertAdjacentHTML('beforeend',renderSuiteStrip());};
+  2785→const _renderReportsSuite=renderReports;renderReports=function(root){_renderReportsSuite(root);root.insertAdjacentHTML('beforeend',`<div class="section-title" style="margin-top:18px">Decision signals</div><div class="suite-panel"><div class="suite-grid">${suiteInsights().map((x,i)=>`<div class="suite-insight"><strong>${i+1}.</strong> ${esc(x)}</div>`).join('')}</div></div>`);};
+  2786→const _renderHabitsSuite=renderHabits;renderHabits=function(root){_renderHabitsSuite(root);root.insertAdjacentHTML('beforeend',`<div class="suite-panel" style="margin-top:18px"><div class="suite-card-title">Habit signal</div><div class="suite-muted">Use streaks as evidence, not pressure. Your current XP is ${state.suite.xp||0}.</div></div>`);};
+  2787→const _renderJournalSuite=renderJournal;renderJournal=function(root){_renderJournalSuite(root);root.insertAdjacentHTML('beforeend',`<div class="suite-panel" style="margin-top:18px"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><div><div class="suite-card-title">Shutdown ritual</div><div class="suite-muted">Close the loop: capture what mattered, what blocked you, and what starts tomorrow.</div></div><button class="suite-btn" data-suite="review">Open weekly review</button></div></div>`);};
+  2788→const _renderLogSuite=renderLog;renderLog=function(root){_renderLogSuite(root);root.insertAdjacentHTML('beforeend',`<div class="suite-panel" style="margin-top:18px"><div class="suite-card-title">Evidence quality</div><div class="suite-grid" style="margin-top:10px"><div class="suite-stat"><div class="suite-muted">Focus sessions</div><div class="n">${state.suite.focusSessions||0}</div></div><div class="suite-stat"><div class="suite-muted">Focus time</div><div class="n">${fmtDuration(state.suite.focusMinutes||0)}</div></div><div class="suite-stat"><div class="suite-muted">XP</div><div class="n">${state.suite.xp||0}</div></div></div></div>`);};
+  2789→const _renderGoalsSuite=renderGoals;renderGoals=function(root){_renderGoalsSuite(root);const bar=root.querySelector('.goal-tabs')||root.firstElementChild;root.insertAdjacentHTML('beforeend',`<div class="suite-panel" style="margin-top:18px"><div style="display:flex;justify-content:space-between;gap:10px;align-items:center"><div><div class="suite-card-title">Project health</div><div class="suite-muted">Projects become healthy when every active branch has a next action and no unresolved blocker.</div></div><button class="suite-btn" data-suite="search">Find work</button></div></div>`);};
+  2790→const _renderFocusModeSuite=renderFocusMode;renderFocusMode=function(){_renderFocusModeSuite();};
+  2791→
+  2792→function suiteAddHeaderActions(){const h=$('headerActions');if(!h)return;if(!h.querySelector('[data-suite="search"]'))h.insertAdjacentHTML('beforeend',`<button class="btn btn-sm" data-suite="search">Search</button>`);}
+  2793→const _renderSuiteBase=render;render=function(){_renderSuiteBase();suiteAddHeaderActions();};
+  2794→
+  2795→document.addEventListener('click',e=>{
+  2796→  const el=e.target.closest('[data-suite]');if(!el)return;const a=el.dataset.suite;
+  2797→  if(a==='search')openGlobalSearch();
+  2798→  if(a==='review')openWeeklyReview();
+  2799→  if(a==='schedule')openScheduleAssistant();
+  2800→  if(a==='integrations')openIntegrations();
+  2801→  if(a==='export-json')exportJSONSuite();
+  2802→  if(a==='import-json')importJSONSuite();
+  2803→  if(a==='export-ics')exportICSSuite();
+  2804→  if(a==='recurrence')setRecurrence(el.dataset.id);
+  2805→});
+  2806→/* Resource actions can appear inside page headers, item modals, and library cards. */
+  2807→document.addEventListener('click',async e=>{
+  2808→  const el=e.target.closest('[data-resource-action]');if(!el)return;if(el.dataset.resourceHandled==='1')return;el.dataset.resourceHandled='1';
+  2809→  const a=el.dataset.resourceAction,id=el.dataset.id;
+  2810→  if(a==='import'||a==='import-for-item'){openResourceUpload(a==='import-for-item'?[el.dataset.item]:[]);return;}
+  2811→  if(a==='open'){openResource(id);return;}
+  2812→  if(a==='menu'){openResourceMenu(id);return;}
+  2813→  if(a==='delete'){closeModal();deleteResource(id);return;}
+  2814→  if(a==='attach'){openResourceAttach(id);return;}
+  2815→  if(a==='edit-cover'){closeModal();openResourceCoverEdit(id);return;}
+  2816→});
+  2817→/* Search / intelligence keyboard paths */
+  2818→document.addEventListener('keydown',e=>{const mod=e.metaKey||e.ctrlKey;if(mod&&e.shiftKey&&e.key.toLowerCase()==='k'){e.preventDefault();openGlobalSearch();}});
+  2819→
+  2820→/* Make recurrence discoverable in item detail by augmenting the existing modal actions. */
+  2821→const _openItemDetailOriginal=openItemDetail;
+  2822→openItemDetail=function(id){_openItemDetailOriginal(id);const footer=[...document.querySelectorAll('.modal-actions button')];const host=footer.find(b=>/Timebox/i.test(b.textContent||''));if(host&&!document.querySelector('[data-suite="recurrence"]')){host.insertAdjacentHTML('beforebegin',`<button class="btn" data-suite="recurrence" data-id="${id}">${I.repeat} Repeat</button>`);}};
+  2823→
+  2824→/* Improve stop/complete linkage through explicit helper available to the UI. */
+  2825→function completeItem(id){const i=getItem(id);if(!i)return;const before=i.status;i.status='done';i.manualProgress=100;i.completedAt=new Date().toISOString();i.updatedAt=new Date().toISOString();state.suite.xp+=20;recordEvent('item_updated',{itemId:id,from:before,to:'done'});saveDebounced();render();toast('Completed', {description:i.title});}
+  2826→
+  2827→/* Export suite state on ordinary backups too. */
+  2828→const _exportClickPatch=setInterval(()=>{const b=document.querySelector('[data-action="export"]');if(b&&!b.dataset.suiteBound){b.dataset.suiteBound='1';b.addEventListener('click',()=>{setTimeout(()=>{const label=document.querySelector('#savedAtLabel');if(label)label.title='Aurora Suite enabled';},0)});}},1500);
+  2829→
+  2830→
+  2831→/* ==================== BATCH RELEASE: RESOURCE READER + ROADMAP GRAPH ==================== */
+  2832→function ensureBatchModel(){
+  2833→  if(!Array.isArray(state.resources))state.resources=[];
+  2834→  state.resources.forEach(r=>{r.pageCount=Number(r.pageCount)||0;r.currentPage=Number(r.currentPage)||1;r.pageActivity=r.pageActivity&&typeof r.pageActivity==='object'?r.pageActivity:{};r.readerNotes=Array.isArray(r.readerNotes)?r.readerNotes:[];r.bookmarks=Array.isArray(r.bookmarks)?r.bookmarks:[];r.highlights=Array.isArray(r.highlights)?r.highlights:[];r.roles=r.roles&&typeof r.roles==='object'?r.roles:{};});
+  2835→  if(!Array.isArray(state.roadmaps))state.roadmaps=[];
+  2836→  state.roadmaps.forEach(m=>{m.nodes=Array.isArray(m.nodes)?m.nodes:[];m.links=Array.isArray(m.links)?m.links:[];m.createdAt=m.createdAt||new Date().toISOString();m.updatedAt=m.updatedAt||m.createdAt;});
+  2837→}
+  2838→ensureBatchModel();
+  2839→const __persistBatch=persist;
+  2840→persist=function(){
+  2841→  ensureBatchModel();
+  2842→  try{
+  2843→    const toSave={schemaVersion:SCHEMA_VERSION,items:state.items,resources:state.resources,roadmaps:state.roadmaps,labels:state.labels,entries:state.entries,events:state.events,activeTimer:state.activeTimer,graphPositions:state.graphPositions,expanded:state.expanded,habits:state.habits,journal:state.journal,view:state.view,graphView:state.graphView,reportRange:state.reportRange,customFrom:state.customFrom,customTo:state.customTo,calendarSystem:state.calendarSystem,focusClockType:state.focusClockType,focusBackground:state.focusBackground,focusPreset:state.focusPreset||'25',focusCompact:!!state.focusCompact,dailyCapacityMin:state.dailyCapacityMin||240,calendarSelectedDate:state.calendarSelectedDate||todayStr(),activeRoadmapId:state.activeRoadmapId||null,suite:state.suite||{}};
+  2844→    localStorage.setItem(STORAGE_KEY,JSON.stringify(toSave));state.lastSavedAt=new Date().toLocaleTimeString();const el=$('savedAtLabel');if(el)el.textContent=state.lastSavedAt;
+  2845→  }catch(e){console.error('Save failed',e);}
+  2846→};
+  2847→function resourceInsight(r){
+  2848→  const mins=resourceActivityMin(r);const pages=Number(r.pageCount)||0;const visited=Object.keys(r.pageActivity||{}).length;const progress=resourceProgress(r);
+  2849→  return {active:mins,pages,visited,coverage:pages?Math.min(100,Math.round(visited/pages*100)):progress};
+  2850→}
+  2851→function renderResourceInsights(r){const x=resourceInsight(r);const max=Math.max(1,...Object.values(r.pageActivity||{}).map(Number));let heat='';if(x.pages){heat=Array.from({length:x.pages},(_,i)=>{const n=Number(r.pageActivity?.[i+1])||0;const level=n?Math.max(1,Math.min(4,Math.ceil((n/max)*4))):0;return `<button class="resource-heat-cell" data-reader-page="${i+1}" data-level="${level}" title="Page ${i+1} · ${Math.round(n)} min">${i+1}</button>`}).join('');}else heat='<div style="color:var(--muted);font-size:12px">Set total pages in the reader to unlock the full heatmap.</div>';
+  2852→  return `<div class="resource-insight-grid"><div class="resource-insight-card"><div class="muted">Active time</div><div class="big">${fmtDuration(x.active)}</div><div class="muted">real reader interaction</div></div><div class="resource-insight-card"><div class="muted">Page coverage</div><div class="big">${x.coverage}%</div><div class="muted">${x.visited}${x.pages?` / ${x.pages} pages visited`: ' pages manually tracked'}</div></div><div class="resource-insight-card"><div class="muted">Bookmarks / notes</div><div class="big">${(r.bookmarks||[]).length} / ${(r.readerNotes||[]).length}</div><div class="muted">linked evidence</div></div></div><div class="section-title" style="margin-top:16px">Page heatmap</div><div class="resource-heatmap">${heat}</div>`;
+  2853→}
+  2854→async function openResourceEnhanced(resourceId){
+  2855→  const r=resourceById(resourceId);if(!r)return;ensureBatchModel();const blob=await getResourceFile(resourceId);if(!blob){toast('Resource file is unavailable',{description:r.fileName||r.title});return;}
+  2856→  const url=URL.createObjectURL(blob);r.lastOpened=new Date().toISOString();r.activity=r.activity||[];const session={id:uid(),startedAt:new Date().toISOString(),activeMin:0,idleMin:0,startedPage:r.currentPage||1};r.activity.push(session);saveDebounced();
+  2857→  const noteRows=(r.readerNotes||[]).slice(-8).reverse().map(n=>`<div class="reader-note"><strong>Page ${n.page||'—'}</strong> · ${esc(n.text)}<small>${fmtDateTime(n.at)}</small></div>`).join('')||'<div style="color:var(--muted);font-size:11px">No notes yet.</div>';
+  2858→  const marks=(r.bookmarks||[]).map(p=>`<button class="reader-bookmark" data-reader-page="${p}">p.${p}</button>`).join('')||'<span style="font-size:11px;color:var(--muted)">None</span>';
+  2859→  const body=`<div class="resource-reader-pro" data-reader-id="${r.id}">
+  2860→    <div class="resource-reader-toolbar"><div class="reader-meta"><strong>${esc(r.title)}</strong><span>${esc(r.fileName||'PDF')}</span><span id="batchReaderProgress">${resourceProgress(r)}% processed</span><span id="batchReaderSession">Session 0m</span></div><div class="resource-reader-tools"><button class="btn btn-sm" data-resource-reader-focus="${r.id}">${I.target} Focus</button><a class="btn btn-sm" href="${url}" download="${esc(r.fileName||r.title+'.pdf')}">${I.download} Download</a></div></div>
+  2861→    <div class="resource-reader-grid"><div class="resource-page-shell"><iframe class="resource-frame" src="${url}#page=${r.currentPage||1}&zoom=page-width" title="${esc(r.title)}"></iframe></div>
+  2862→    <aside class="resource-reader-panel">
+  2863→      <div class="reader-panel-section"><div class="reader-panel-title">Page control</div><div class="reader-page-controls"><button class="btn btn-sm" data-reader-step="-1">${I.chevronL} Previous</button><button class="btn btn-sm" data-reader-step="1">Next ${I.chevronR}</button></div><div class="reader-field" style="margin-top:8px"><input id="batchPageInput" type="number" min="1" value="${r.currentPage||1}" placeholder="Current page"><button class="btn btn-sm btn-primary" data-reader-page-go>Go</button></div><div class="reader-field" style="margin-top:8px"><label style="font-size:10px;color:var(--muted)">Total pages</label><input id="batchPageCount" type="number" min="1" value="${r.pageCount||''}" placeholder="318"></div></div>
+  2864→      <div class="reader-panel-section"><div class="reader-panel-title">Progress</div><div class="reader-field"><input id="batchProgress" type="range" min="0" max="100" value="${resourceProgress(r)}"><strong id="batchProgressValue">${resourceProgress(r)}%</strong></div><div class="pbar" style="margin-top:7px"><span id="batchProgressBar" style="width:${resourceProgress(r)}%"></span></div></div>
+  2865→      <div class="reader-panel-section"><div class="reader-panel-title">Bookmarks</div><button class="btn btn-sm" data-reader-bookmark>${I.plus} Bookmark current page</button><div class="reader-bookmarks" style="margin-top:8px">${marks}</div></div>
+  2866→      <div class="reader-panel-section"><div class="reader-panel-title">Add note</div><textarea id="batchNoteText" rows="3" placeholder="What matters on this page?"></textarea><button class="btn btn-sm btn-primary" style="margin-top:7px;width:100%" data-reader-note-save>Save page note</button></div>
+  2867→      <div class="reader-panel-section"><div class="reader-panel-title">Recent notes</div><div class="reader-notes">${noteRows}</div></div>
+  2868→    </aside></div>
+  2869→    <div class="resource-reader-toolbar"><span style="font-size:11px;color:var(--muted)">Active time is counted while the reader is engaged. Moving away marks the session idle.</span><div class="resource-reader-tools"><button class="btn btn-sm" data-reader-dashboard>Resource insights</button><button class="btn btn-sm btn-danger" data-reader-close>Close reader</button></div></div>
+  2870→  </div>`;
+  2871→  openModal('Resource reader',body,[],{wide:true});
+  2872→  const modal=document.querySelector('.resource-reader-pro');let active=true,last=Date.now(),tick=setInterval(()=>{const now=Date.now(),d=(now-last)/60000;if(active&&d>0&&d<1)session.activeMin+=d;else if(!active&&d>0&&d<1)session.idleMin+=d;last=now;const el=document.querySelector('#batchReaderSession');if(el)el.textContent=`Session ${fmtDuration(session.activeMin)}`;},1000);
+  2873→  const markActive=()=>{active=true;last=Date.now();};const markIdle=()=>{active=false;last=Date.now();};modal?.addEventListener('mousemove',markActive);modal?.addEventListener('click',markActive);modal?.addEventListener('keydown',markActive);modal?.addEventListener('mouseleave',markIdle);
+  2874→  const setPage=(n)=>{n=Math.max(1,Number(n)||1);r.currentPage=n;r.pageActivity[n]=Number(r.pageActivity[n]||0)+0.01;const frame=modal?.querySelector('.resource-frame');if(frame){try{const base=frame.src.split('#')[0];frame.src=base+'#page='+n+'&zoom=page-width';}catch(_){}}const input=$('batchPageInput');if(input)input.value=n;};
+  2875→  const closeReader=()=>{clearInterval(tick);r.currentPage=Number($('batchPageInput')?.value)||r.currentPage||1;r.pageCount=Number($('batchPageCount')?.value)||r.pageCount||0;r.progress=clamp(Number($('batchProgress')?.value)||r.progress,0,100);const mins=Math.round(session.activeMin*100)/100;r.timeSpentMin=Math.round((r.timeSpentMin||0)+mins);r.activity=r.activity||[];r.updatedAt=new Date().toISOString();r.pageActivity[r.currentPage]=Number(r.pageActivity[r.currentPage]||0)+Math.max(mins,0.25);recordEvent('resource_session_ended',{resourceId:r.id,activeMin:Math.round(mins),idleMin:Math.round(session.idleMin),page:r.currentPage});saveDebounced();window.__batchReaderClose=null;URL.revokeObjectURL(url);closeModal();render();};
+  2876→  window.__batchReaderClose=closeReader;
+  2877→  modal?.addEventListener('click',e=>{
+  2878→    const pageBtn=e.target.closest('[data-reader-page]');if(pageBtn){e.preventDefault();setPage(Number(pageBtn.dataset.readerPage));return;}
+  2879→    const step=e.target.closest('[data-reader-step]');if(step){e.preventDefault();setPage((Number($('batchPageInput')?.value)||r.currentPage||1)+Number(step.dataset.readerStep));return;}
+  2880→    if(e.target.closest('[data-reader-page-go]')){setPage(Number($('batchPageInput')?.value)||1);return;}
+  2881→    if(e.target.closest('[data-reader-bookmark]')){const p=Number($('batchPageInput')?.value)||r.currentPage||1;r.bookmarks=[...(r.bookmarks||[])];if(!r.bookmarks.includes(p))r.bookmarks.push(p);r.bookmarks.sort((a,b)=>a-b);toast('Bookmark added',{description:`Page ${p}`});closeReader();setTimeout(()=>openResourceEnhanced(r.id),0);return;}
+  2882→    if(e.target.closest('[data-reader-note-save]')){const text=($('batchNoteText')?.value||'').trim();if(!text)return toast('Write a note first');const p=Number($('batchPageInput')?.value)||r.currentPage||1;r.readerNotes=[...(r.readerNotes||[]),{id:uid(),page:p,text,at:new Date().toISOString()}];recordEvent('resource_note_added',{resourceId:r.id,page:p});saveDebounced();toast('Page note saved',{description:`Page ${p}`});closeReader();setTimeout(()=>openResourceEnhanced(r.id),0);return;}
+  2883→    if(e.target.closest('[data-reader-dashboard]')){e.preventDefault();showResourceDashboard(r.id);return;}
+  2884→    if(e.target.closest('[data-reader-close]')){e.preventDefault();closeReader();return;}
+  2885→    if(e.target.matches('#batchProgress')){const v=Number(e.target.value)||0;const pv=$('batchProgressValue'),bar=$('batchProgressBar');if(pv)pv.textContent=v+'%';if(bar)bar.style.width=v+'%';}
+  2886→  });
+  2887→}
+  2888→function showResourceDashboard(id){const r=resourceById(id);if(!r)return;const links=(state.items||[]).filter(i=>(i.resourceIds||[]).includes(id));const ins=renderResourceInsights(r);const body=`<div><div class="screen-intro"><div class="screen-copy"><div class="screen-kicker">Resource intelligence</div><h2>${esc(r.title)}</h2><p>${esc(r.fileName||'PDF')} · ${formatBytes(r.size)} · last opened ${r.lastOpened?fmtDateTime(r.lastOpened):'never'}</p></div></div>${ins}<div class="section-title" style="margin-top:18px">Connected work</div><div class="suite-list">${links.map(i=>`<div class="suite-row"><div class="suite-row-main"><div class="suite-row-title">${esc(i.title)}</div><div class="suite-row-sub">${i.type==='goal'?'Goal':'Task'} · ${i.status}</div></div><button class="btn btn-sm" data-resource-open-item="${i.id}">Open</button></div>`).join('')||'<div class="empty-state" style="padding:20px">No connected work yet.</div>'}</div></div>`;openModal('Resource insights',body,[{label:'Back to resource',cls:'btn',onClick:()=>{closeModal();openResourceEnhanced(id);}},{label:'Done',cls:'btn btn-primary',close:true}],{wide:true});}
+  2889→/* override reader so the richer system is used */
+
+[showing lines 2700-2889 of 3088; use offset=2890 with limit to continue reading]
