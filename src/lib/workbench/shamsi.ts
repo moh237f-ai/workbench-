@@ -177,19 +177,20 @@ export function buildShamsiMonthGrid(jy: number, jm: number): CalendarCell[] {
   return cells;
 }
 
-/** 6×7 grid for a Gregorian month (weeks start Sunday) */
+/** 6×7 grid for a Gregorian month (weeks start Sunday).
+ *  Leading/trailing cells carry the adjacent month's real dates so the grid
+ *  matches the Shamsi grid's behavior (clickable, dimmed via inMonth). */
 export function buildGregorianMonthGrid(year: number, month: number): CalendarCell[] {
   const startOffset = new Date(year, month, 1).getDay(); // 0 = Sunday
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const cells: CalendarCell[] = [];
-  for (let i = 0; i < 42; i++) {
-    const dn = i - startOffset + 1;
-    if (dn < 1 || dn > daysInMonth) {
-      cells.push({ date: new Date(0), iso: '', shamsi: { jy: 0, jm: 0, jd: 0 }, inMonth: false });
-      continue;
-    }
-    const date = new Date(year, month, dn);
-    cells.push({ date, iso: isoOf(date), shamsi: dateToShamsi(date), inMonth: true });
-  }
+  const push = (date: Date) => {
+    cells.push({ date, iso: isoOf(date), shamsi: dateToShamsi(date), inMonth: date.getMonth() === month });
+  };
+  const prevDays = new Date(year, month, 0).getDate();
+  for (let i = startOffset - 1; i >= 0; i--) push(new Date(year, month - 1, prevDays - i));
+  for (let d = 1; d <= daysInMonth; d++) push(new Date(year, month, d));
+  let dayNum = 1;
+  while (cells.length < 42) push(new Date(year, month + 1, dayNum++));
   return cells;
 }

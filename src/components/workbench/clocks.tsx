@@ -39,9 +39,8 @@ interface Face {
 
 function faceOf(p: ClockProps): Face {
   if (p.hasTimer) {
-    const countdown = p.phaseLabel !== 'Timer';
     return {
-      time: countdown ? dispClock(p.remaining) : dispClock(p.remaining),
+      time: dispClock(p.remaining),
       sub: p.phaseLabel,
       isTimer: true,
     };

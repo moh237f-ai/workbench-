@@ -4,7 +4,7 @@
 import React from 'react';
 import { Check, Flame, Pencil, Plus } from 'lucide-react';
 import { useWB } from '@/lib/workbench/store';
-import { computeStreak, fmtDateNice, isoDate, todayStr } from '@/lib/workbench/helpers';
+import { computeHabitStreak, fmtDateNice, isoDate, todayStr } from '@/lib/workbench/helpers';
 import { Btn, IconBtn } from '../ui/primitives';
 import { useViewActions } from './viewCtx';
 
@@ -42,7 +42,7 @@ export function HabitsView() {
     <div className="habit-grid fade-in" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0,1fr))', gap: 14 }}>
       {habits.map((h) => {
         const doneToday = !!h.log?.[today];
-        const streak = computeStreak(h.log);
+        const streak = computeHabitStreak(h.log, h.cadence);
         const days: { date: string; done: boolean }[] = [];
         const td = new Date();
         for (let i = 83; i >= 0; i--) {
@@ -72,7 +72,7 @@ export function HabitsView() {
               </div>
               {streak > 0 && (
                 <span className="chip chip-soon">
-                  <Flame size={11} /> {streak}d
+                  <Flame size={11} /> {streak}{h.cadence === 'weekly' ? 'w' : 'd'}
                 </span>
               )}
               <IconBtn small title="Edit habit" onClick={() => openHabitForm(h.id)}>

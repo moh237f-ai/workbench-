@@ -4,11 +4,12 @@
 import './library.css';
 
 import { useMemo, useRef, useState } from 'react';
-import { FileText, ImagePlus, PenLine, Star, Trash2 } from 'lucide-react';
+import { FileText, ImagePlus, PenLine, RefreshCw, Star, Trash2 } from 'lucide-react';
 import { useWB, wbFileAvgSecPerPage, wbFileMinutes } from '@/lib/workbench/store';
 import { fmtDuration, parseDate } from '@/lib/workbench/helpers';
 import { SWATCHES, type FileCoverMode, type LibraryFolder } from '@/lib/workbench/types';
-import { purgeFileArtifacts } from '@/lib/workbench/idb';
+import { purgeFileArtifacts, saveCover } from '@/lib/workbench/idb';
+import { loadFileDoc, pageToDataUrl } from '@/lib/workbench/pdf';
 import { applyCustomCover, refreshCover, useFileCover } from '@/lib/workbench/covers';
 import { Btn, Modal, Seg, toast, useConfirm } from '../ui/primitives';
 import { DateField } from '../ui/DateField';
@@ -67,6 +68,7 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
   const [notes, setNotes] = useState(file?.notes ?? '');
   const [color, setColor] = useState<string | null>(file?.color ?? null);
   const [coverPageText, setCoverPageText] = useState(String(file?.coverPage ?? 1));
+  const [redrawing, setRedrawing] = useState(false);
 
   const fileSessions = useMemo(
     () =>
@@ -87,6 +89,24 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
     if (Number.isFinite(n) && n >= 1 && n <= file.pageCount) {
       updateFile(file.id, { coverPage: n, coverMode: 'page' });
       refreshCover(file.id);
+    }
+  };
+
+  /* regenerate the page cover with the CURRENT renderer — fixes thumbnails
+     rendered by older builds (e.g. before the pdf.js font/cmap fixes) */
+  const redrawCover = async () => {
+    if (!file) return;
+    setRedrawing(true);
+    try {
+      const doc = await loadFileDoc(file.id);
+      const cover = await pageToDataUrl(doc, file.coverPage ?? 1, 420, 0.72);
+      await saveCover(file.id, cover);
+      refreshCover(file.id);
+      toast('Cover redrawn', `Page ${file.coverPage ?? 1} re-rendered.`);
+    } catch {
+      toast('Could not redraw the cover');
+    } finally {
+      setRedrawing(false);
     }
   };
 
@@ -155,7 +175,9 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
       }
     >
       <div className="lib-file-name" title={file.fileName}>
-        {file.fileName} · {file.pageCount} pages · p.{file.currentPage}
+        {file.kind === 'md'
+          ? `${file.fileName} · markdown${file.size ? ` · ${(file.size / 1024).toFixed(1)} kB` : ''}`
+          : `${file.fileName} · ${file.pageCount} pages · p.${file.currentPage}`}
       </div>
 
       <div className="lib-form-grid">
@@ -171,6 +193,7 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
             )}
           </div>
           <div className="lib-cover-controls">
+            {file.kind !== 'md' && (
             <Seg<FileCoverMode>
               value={file.coverMode}
               onChange={(m) => updateFile(file.id, { coverMode: m })}
@@ -179,7 +202,8 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
                 { id: 'custom', label: 'Custom' },
               ]}
             />
-            {file.coverMode === 'page' ? (
+            )}
+            {file.kind !== 'md' && (file.coverMode === 'page' ? (
               <div className="field">
                 <label htmlFor="ff-coverpage">Cover page (1–{file.pageCount})</label>
                 <input
@@ -192,6 +216,14 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
                   onChange={(e) => applyCoverPage(e.target.value)}
                   onBlur={() => setCoverPageText(String(file.coverPage))}
                 />
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Btn size="sm" onClick={() => void redrawCover()} disabled={redrawing}>
+                    <RefreshCw size={13} /> {redrawing ? 'Redrawing…' : 'Redraw cover'}
+                  </Btn>
+                  <span className="field-help" style={{ margin: 0 }}>
+                    Re-renders this thumbnail if it looks wrong.
+                  </span>
+                </div>
               </div>
             ) : (
               <>
@@ -212,6 +244,9 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
                 />
                 <div className="field-help">JPG or PNG — stored locally as this file&apos;s cover.</div>
               </>
+            ))}
+            {file.kind === 'md' && (
+              <div className="field-help">Markdown covers are generated from the note&apos;s title.</div>
             )}
           </div>
         </div>
@@ -337,7 +372,9 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
         )}
       </div>
 
-      {/* page time map */}
+      {/* page time map (PDF only) */}
+      {file.kind !== 'md' && (
+      <>
       <div className="section-title">Page time map</div>
       <div
         className="lib-pmap"
@@ -366,6 +403,8 @@ export function FileFormModal({ fileId, onClose }: { fileId: string; onClose: ()
         <span className="lib-pmap-cell manual" style={{ background: pmapCellBackground(0) }} />
         <span className="lib-pmap-legend-label">manually marked read</span>
       </div>
+      </>
+      )}
 
       {/* recent sessions */}
       <div className="section-title">Recent sessions</div>

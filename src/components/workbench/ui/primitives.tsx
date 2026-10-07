@@ -77,13 +77,16 @@ export function Seg<T extends string>({
   onChange: (v: T) => void;
   className?: string;
 }) {
+  const iconOnly = options.every((o) => !o.label);
   return (
-    <div className={`seg ${className}`} role="tablist">
+    <div className={`seg ${iconOnly ? 'seg-icons' : ''} ${className}`} role="tablist">
       {options.map((o) => (
         <button
           key={o.id}
           role="tab"
           aria-selected={value === o.id}
+          title={o.label || undefined}
+          aria-label={o.label || undefined}
           className={value === o.id ? 'active' : ''}
           onClick={() => onChange(o.id)}
           type="button"
@@ -139,13 +142,13 @@ export function Modal({
       }}
     >
       <div className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
-        <div className="flex items-start justify-between gap-3">
+        <div className="modal-head">
           <h2>{title}</h2>
           <IconBtn title="Close" onClick={onClose} small>
             <X />
           </IconBtn>
         </div>
-        {children}
+        <div className="modal-body">{children}</div>
         {footer && <div className="modal-actions">{footer}</div>}
       </div>
     </div>,
@@ -242,4 +245,132 @@ export function useConfirm() {
     if (typeof window !== 'undefined') return window.confirm(msg);
     return false;
   }, []);
+}
+
+/* ---------- media query (SSR-safe) ---------- */
+
+export function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(query).matches : false
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(query);
+    const onChange = () => setMatches(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [query]);
+  return matches;
+}
+
+/* ---------- portal dropdown menu (click-outside + Esc) ---------- */
+
+export function PopMenu({
+  open,
+  onClose,
+  anchorRef,
+  children,
+  align = 'end',
+  width = 220,
+}: {
+  open: boolean;
+  onClose: () => void;
+  anchorRef: React.RefObject<HTMLElement | null>;
+  children: React.ReactNode;
+  align?: 'start' | 'end';
+  width?: number;
+}) {
+  /* position: measured after mount so the menu can flip ABOVE its anchor
+     when there isn't room below (bottom toolbars) — never off-window */
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  const place = useCallback(() => {
+    const r = anchorRef.current?.getBoundingClientRect();
+    const menuH = ref.current?.offsetHeight ?? 0;
+    if (!r) {
+      setPos(null);
+      return;
+    }
+    let left = align === 'end' ? r.right - width : r.left;
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    const spaceBelow = window.innerHeight - r.bottom;
+    const top =
+      spaceBelow < menuH + 12 && r.top > menuH + 12
+        ? Math.max(8, r.top - menuH - 6) /* flip up */
+        : Math.min(r.bottom + 6, Math.max(8, window.innerHeight - menuH - 8));
+    setPos({ top, left });
+  }, [anchorRef, align, width]);
+
+  useEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    /* first paint renders off-screen-invisible so it can be measured, then placed */
+    requestAnimationFrame(place);
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (ref.current?.contains(t)) return;
+      if (anchorRef.current?.contains(t)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', place);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open, onClose, anchorRef, align, width, place]);
+
+  if (!open || typeof document === 'undefined') return null;
+  return createPortal(
+    <div
+      ref={ref}
+      className={`pop-menu${pos ? '' : ' pop-menu-measuring'}`}
+      role="menu"
+      style={
+        pos
+          ? { position: 'fixed', top: pos.top, left: pos.left, width }
+          : { position: 'fixed', top: -9999, left: -9999, width, visibility: 'hidden' }
+      }
+    >
+      {children}
+    </div>,
+    document.body
+  );
+}
+
+export function PopMenuItem({
+  icon,
+  label,
+  onClick,
+  active,
+  danger,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  active?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      className={`pop-menu-item ${active ? 'active' : ''} ${danger ? 'danger' : ''}`}
+      onClick={onClick}
+    >
+      {icon}
+      <span>{label}</span>
+    </button>
+  );
 }

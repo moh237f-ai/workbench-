@@ -1,31 +1,17 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Sora, JetBrains_Mono } from "next/font/google";
+// Fully offline fonts — bundled at build time, zero network at build or runtime.
+import "@fontsource-variable/inter";
+import "@fontsource-variable/sora";
+import "@fontsource-variable/jetbrains-mono";
+import "@fontsource-variable/vazirmatn"; // Persian/Arabic script — first-class fallback
 import "./globals.css";
-
-const inter = Inter({
-  variable: "--font-inter",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const sora = Sora({
-  variable: "--font-sora",
-  subsets: ["latin"],
-  display: "swap",
-});
-
-const jetbrains = JetBrains_Mono({
-  variable: "--font-jetbrains",
-  subsets: ["latin"],
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "Workbench Aurora — Focus, Goals, Time",
   description:
     "A local-first productivity workbench: goals, focus sessions, habits, journal, dual calendar and reports — in one calm cockpit.",
   icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+    icon: "/logo.svg",
   },
 };
 
@@ -47,11 +33,7 @@ export default function RootLayout({
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeInit }} />
       </head>
-      <body
-        className={`${inter.variable} ${sora.variable} ${jetbrains.variable} antialiased`}
-      >
-        {children}
-      </body>
+      <body className="antialiased">{children}</body>
     </html>
   );
 }

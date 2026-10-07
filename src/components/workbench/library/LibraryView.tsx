@@ -6,14 +6,14 @@ import './library.css';
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  Archive, ArchiveRestore, BookOpen, Brain, Calculator, Check, CheckSquare, ChevronDown, ChevronRight,
-  Clock, Code2, FileText, FlaskConical, Folder, FolderInput, FolderPlus, Globe, GraduationCap, Inbox,
-  Library as LibraryIco, Link2, ListTree, Music, Palette, Pencil, PenLine, Plus, Search, Star, Trash2,
-  Upload, X,
+  AlignJustify, Archive, ArchiveRestore, BookOpen, Brain, Calculator, Check, CheckSquare, ChevronDown, ChevronRight,
+  Clock, Code2, FileText, FlaskConical, Folder, FolderInput, FolderPlus, Globe, GraduationCap, Hash, Inbox,
+  LayoutGrid, Library as LibraryIco, Link2, ListTree, MoreHorizontal, Music, NotebookPen, Palette, Pencil, PenLine,
+  Plus, Search, Star, Trash2, Upload, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
-  useWB, wbFileDeadlineStatus, wbFileMinutes, wbFileProgress, wbFileReadPages, wbFileSeconds,
+  useWB, wbFileDeadlineStatus, wbFileMinutes, wbFileProgress, wbFilePositionLabel, wbFileReadPages, wbFileSeconds,
   wbItemsForFile, wbReadingMinutesInRange, wbReadingPagesInRange,
 } from '@/lib/workbench/store';
 import { daysUntil, fmtDuration, startOfWeekStr, todayStr, uid } from '@/lib/workbench/helpers';
@@ -22,19 +22,20 @@ import type { LibraryFolder, ResourceFile } from '@/lib/workbench/types';
 import { putBlob, purgeFileArtifacts, saveCover } from '@/lib/workbench/idb';
 import { loadDocFromBlob, pageToDataUrl } from '@/lib/workbench/pdf';
 import { useFileCover } from '@/lib/workbench/covers';
-import { Btn, IconBtn, Seg, toast, useConfirm } from '../ui/primitives';
+import { createMdNote } from '@/lib/workbench/notes';
+import { Btn, IconBtn, Seg, toast, useConfirm, useMediaQuery } from '../ui/primitives';
 
 /* ---------- local types ---------- */
 
 type LibFilter = 'all' | 'reading' | 'unread' | 'deadline' | 'archived';
 type LibSort = 'recent' | 'deadline' | 'progress' | 'title';
 
-const FILTER_OPTIONS: { id: LibFilter; label: string }[] = [
-  { id: 'all', label: 'All' },
-  { id: 'reading', label: 'Reading' },
-  { id: 'unread', label: 'Unread' },
-  { id: 'deadline', label: 'Deadline' },
-  { id: 'archived', label: 'Archived' },
+const FILTER_OPTIONS: { id: LibFilter; label: string; icon: React.ReactNode }[] = [
+  { id: 'all', label: 'All', icon: <LibraryIco size={13} /> },
+  { id: 'reading', label: 'Reading', icon: <BookOpen size={13} /> },
+  { id: 'unread', label: 'Unread', icon: <FileText size={13} /> },
+  { id: 'deadline', label: 'Deadline', icon: <Clock size={13} /> },
+  { id: 'archived', label: 'Archived', icon: <Archive size={13} /> },
 ];
 
 /* ---------- folder icon mapping (store keeps a string key) ---------- */
@@ -60,15 +61,16 @@ function folderIconOf(key: string): LucideIcon {
 
 /* ---------- shared import pipeline (module level: header buttons + drop zone + empty state) ---------- */
 
-let importingCount = 0;
+interface ImportProgress { done: number; total: number; current: string }
+let importing: ImportProgress | null = null;
 const importingListeners = new Set<() => void>();
 
-function bumpImporting(delta: number): void {
-  importingCount = Math.max(0, importingCount + delta);
+function setImportProgress(p: ImportProgress | null): void {
+  importing = p;
   importingListeners.forEach((l) => l());
 }
 
-function useImportingCount(): number {
+function useImportProgress(): ImportProgress | null {
   return useSyncExternalStore(
     (cb) => {
       importingListeners.add(cb);
@@ -76,7 +78,7 @@ function useImportingCount(): number {
         importingListeners.delete(cb);
       };
     },
-    () => importingCount
+    () => importing
   );
 }
 
@@ -88,6 +90,7 @@ async function ingestPdf(file: File, id: string, folderId: string | null): Promi
   await saveCover(id, cover);
   useWB.getState().addFile({
     id,
+    kind: 'pdf',
     title: file.name.replace(/\.pdf$/i, ''),
     fileName: file.name,
     size: file.size,
@@ -96,41 +99,83 @@ async function ingestPdf(file: File, id: string, folderId: string | null): Promi
   });
 }
 
-/** Upload pipeline for loose PDF files: store blob → render cover → register file (toast per file). */
-async function importPdfFiles(list: File[]): Promise<void> {
-  bumpImporting(list.length);
-  for (const file of list) {
-    const id = uid();
-    try {
-      await ingestPdf(file, id, null);
-      toast('Added to library', file.name.replace(/\.pdf$/i, ''));
-    } catch {
-      await purgeFileArtifacts(id).catch(() => undefined);
-      toast('Import failed', file.name);
-    } finally {
-      bumpImporting(-1);
-    }
-  }
+const MD_RE = /\.(md|markdown|txt)$/i;
+
+/** True when a file with the same name AND size already exists in the library. */
+function isDuplicate(file: File): boolean {
+  const st = useWB.getState();
+  return st.files.some((f) => f.fileName === file.name && f.size === file.size);
+}
+export function isMarkdownFile(f: File): boolean {
+  return f.type === 'text/markdown' || MD_RE.test(f.name);
 }
 
-const IMPORT_FOLDER_CAP = 60;
+/** One markdown file through the pipeline: text blob → IDB, typographic cover, store record. */
+async function ingestMd(file: File, id: string, folderId: string | null): Promise<void> {
+  const text = await file.text();
+  await putBlob(id, new Blob([text], { type: 'text/markdown' }));
+  const st = useWB.getState();
+  const added = st.addFile({
+    id,
+    kind: 'md',
+    title: file.name.replace(MD_RE, ''),
+    fileName: file.name,
+    size: file.size,
+    pageCount: 1,
+    currentPage: 1,
+    scrollProgress: 0,
+    folderId,
+  });
+  // cover is generated by the cover hook on first render; nothing to render here
+  void added;
+}
+
+/** Upload pipeline for loose files (PDFs + markdown): store blob → cover → register (toast per file). */
+async function importPdfFiles(list: File[]): Promise<void> {
+  setImportProgress({ done: 0, total: list.length, current: '' });
+  let failed = 0;
+  let dupes = 0;
+  for (let i = 0; i < list.length; i++) {
+    const file = list[i];
+    if (isDuplicate(file)) {
+      dupes++;
+      continue;
+    }
+    setImportProgress({ done: i, total: list.length, current: file.name });
+    const id = uid();
+    try {
+      if (isMarkdownFile(file)) {
+        await ingestMd(file, id, null);
+      } else {
+        await ingestPdf(file, id, null);
+      }
+    } catch {
+      failed++;
+      await purgeFileArtifacts(id).catch(() => undefined);
+    }
+  }
+  setImportProgress(null);
+  if (failed || dupes) toast('Import finished', `${list.length - failed - dupes} added${dupes ? ` · ${dupes} duplicates skipped` : ''}${failed ? ` · ${failed} failed` : ''}`);
+}
+
+const IMPORT_FOLDER_CAP = 1000;
 
 /** Import a whole system folder: builds the folder tree from each file's webkitRelativePath
  *  (e.g. "Math/ODE/chapter1.pdf" → Math → ODE), reusing folders by name + parent. */
 async function importPdfFolder(list: File[]): Promise<void> {
-  const pdfs = list.filter((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name));
+  const pdfs = list.filter((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name) || isMarkdownFile(f));
   const skipped = list.length - pdfs.length;
   if (skipped > 0) {
     toast('Skipped non-PDFs', `${skipped} file${skipped === 1 ? '' : 's'} ignored — only PDFs are imported.`);
   }
   if (!pdfs.length) {
-    toast('No PDFs found', 'Pick a folder that contains PDF files.');
+    toast('Nothing found', 'Pick a folder that contains PDF or Markdown files.');
     return;
   }
   let work = pdfs;
   if (work.length > IMPORT_FOLDER_CAP) {
+    if (!confirm(`This folder contains ${pdfs.length} documents. Import the first ${IMPORT_FOLDER_CAP}?`)) return;
     work = work.slice(0, IMPORT_FOLDER_CAP);
-    toast('Import capped', `Only the first ${IMPORT_FOLDER_CAP} PDFs will be imported (found ${pdfs.length}).`);
   }
 
   /* relative path → folder id cache (create or reuse by name + parent) */
@@ -159,23 +204,25 @@ async function importPdfFolder(list: File[]): Promise<void> {
   let imported = 0;
   let failed = 0;
   const targetFolders = new Set<string>();
-  bumpImporting(work.length);
-  for (const file of work) {
+  setImportProgress({ done: 0, total: work.length, current: '' });
+  for (let i = 0; i < work.length; i++) {
+    const file = work[i];
+    setImportProgress({ done: i, total: work.length, current: file.name });
     const id = uid();
     try {
       const segments = file.webkitRelativePath.split('/').filter(Boolean);
       segments.pop(); // strip the file name
       const folderId = segments.length ? ensureFolderPath(segments) : null;
-      await ingestPdf(file, id, folderId);
+      if (isMarkdownFile(file)) await ingestMd(file, id, folderId);
+      else await ingestPdf(file, id, folderId);
       if (folderId) targetFolders.add(folderId);
       imported += 1;
     } catch {
       failed += 1;
       await purgeFileArtifacts(id).catch(() => undefined);
-    } finally {
-      bumpImporting(-1);
     }
   }
+  setImportProgress(null);
 
   const title = imported
     ? targetFolders.size
@@ -198,7 +245,7 @@ function usePdfPicker(onFiles: (files: File[]) => void): { open: () => void; inp
     <input
       ref={inputRef}
       type="file"
-      accept="application/pdf"
+      accept="application/pdf,text/markdown,.md,.markdown,.txt"
       multiple
       hidden
       onChange={(e) => {
@@ -381,9 +428,11 @@ function flattenFolderOptions(folders: LibraryFolder[]): { id: string; label: st
 export function LibraryHeaderActions() {
   const filter = useWB((s) => s.libraryFilter);
   const setFilter = useWB((s) => s.setLibraryFilter);
+  const folderFilter = useWB((s) => s.libraryFolderFilter);
+  const narrow = useMediaQuery('(max-width: 1100px)');
   const search = useWB((s) => s.librarySearch);
   const setSearch = useWB((s) => s.setLibrarySearch);
-  const importing = useImportingCount();
+  const importing = useImportProgress();
   const selecting = useSelectionMode();
   const { open, input } = usePdfPicker((fs) => void importPdfFiles(fs));
   const { open: openFolder, input: folderInput } = useFolderPicker((fs) => void importPdfFolder(fs));
@@ -414,15 +463,15 @@ export function LibraryHeaderActions() {
         )}
       </div>
       <Seg<LibFilter>
-        className="lib-filter-seg"
+        className={`lib-filter-seg ${narrow ? 'seg-icons' : ''}`}
         value={filter}
         onChange={setFilter}
-        options={FILTER_OPTIONS}
+        options={narrow ? FILTER_OPTIONS.map((o) => ({ id: o.id, label: '', icon: o.icon })) : FILTER_OPTIONS}
       />
-      {importing > 0 && (
-        <span className="lib-importing" role="status">
+      {importing && importing.total > 0 && (
+        <span className="lib-importing" role="status" title={importing.current}>
           <span className="lib-spin" aria-hidden="true" />
-          {importing > 1 ? `Importing ${importing}…` : 'Importing…'}
+          Importing {importing.done + 1}/{importing.total}
         </span>
       )}
       <Btn
@@ -433,6 +482,15 @@ export function LibraryHeaderActions() {
         onClick={() => setSelectionMode(!selecting)}
       >
         <CheckSquare size={14} /> Select
+      </Btn>
+      <Btn size="sm" variant="ghost" title="Write a new markdown note" onClick={() => {
+        const folder = folderFilter !== 'all' && folderFilter !== 'unfiled' ? folderFilter : null;
+        void createMdNote({ title: 'Untitled note', folderId: folder }).then((id) => {
+          if (id) toast('Note created', 'Start typing — it saves as you go.');
+          else toast('Could not create note');
+        });
+      }}>
+        <NotebookPen size={14} /> New note
       </Btn>
       <Btn size="sm" variant="ghost" title="Import a folder of PDFs from your system" onClick={openFolder}>
         <FolderPlus size={14} /> Add folder
@@ -471,6 +529,13 @@ function matchesSearch(f: ResourceFile, q: string): boolean {
     f.fileName.toLowerCase().includes(q) ||
     f.tags.some((t) => t.toLowerCase().includes(q))
   );
+}
+
+/** Tag filter: exact tag match (case-insensitive — tags come from free-text input). */
+function matchesTag(f: ResourceFile, tag: string | null): boolean {
+  if (!tag) return true;
+  const t = tag.toLowerCase();
+  return f.tags.some((x) => x.toLowerCase() === t);
 }
 
 function sortFiles(list: ResourceFile[], sort: LibSort): ResourceFile[] {
@@ -603,8 +668,8 @@ function FolderTree() {
 
   const openIconPop = (e: React.MouseEvent, folder: LibraryFolder) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const W = 200;
-    const H = 158;
+    const W = 252;
+    const H = 340;
     let left = rect.left;
     if (left + W > window.innerWidth - 8) left = Math.max(8, window.innerWidth - W - 8);
     let top = rect.bottom + 4;
@@ -779,27 +844,7 @@ function FolderTree() {
           ) : (
             <span className="lib-tree-caret spacer" aria-hidden="true" />
           )}
-          <Icon size={13} className="lib-tree-ico" aria-hidden="true" />
-          <span
-            className="lib-tree-dot"
-            style={{ backgroundColor: folder.color }}
-            role="button"
-            tabIndex={0}
-            title={`Cycle color (currently ${folder.color})`}
-            aria-label={`Change color of folder ${folder.name}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              cycleColor(folder);
-            }}
-            onDoubleClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                e.stopPropagation();
-                cycleColor(folder);
-              }
-            }}
-          />
+          <Icon size={13} className="lib-tree-ico" style={{ color: folder.color }} aria-hidden="true" />
           {renameId === folder.id ? (
             <input
               className="lib-folder-input"
@@ -840,26 +885,15 @@ function FolderTree() {
               type="button"
               className="lib-tree-act"
               data-ico-btn
-              title="Pick icon"
-              aria-label={`Pick icon for ${folder.name}`}
+              title="Folder settings — name, icon, color, delete"
+              aria-label={`Settings for ${folder.name}`}
+              aria-haspopup="dialog"
               onClick={(e) => {
                 e.stopPropagation();
                 openIconPop(e, folder);
               }}
             >
-              <Palette size={12} />
-            </button>
-            <button
-              type="button"
-              className="lib-tree-act danger"
-              title={`Delete folder "${folder.name}"`}
-              aria-label={`Delete folder ${folder.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                removeFolder(folder);
-              }}
-            >
-              <X size={11} />
+              <MoreHorizontal size={12} />
             </button>
           </span>
         </div>
@@ -894,6 +928,21 @@ function FolderTree() {
         <span className="lib-tree-title">
           <ListTree size={13} aria-hidden="true" /> Folders
         </span>
+        {treeOpen && (
+          <button
+            type="button"
+            className="lib-tree-fold"
+            title="New folder"
+            aria-label="New folder"
+            onClick={() => {
+              setRenameId(null);
+              setCreateParent('root');
+              setCreateText('');
+            }}
+          >
+            <Plus size={14} />
+          </button>
+        )}
         <button
           type="button"
           className="lib-tree-fold"
@@ -988,28 +1037,69 @@ function FolderTree() {
             className="lib-icon-pop"
             style={{ top: iconPop.top, left: iconPop.left }}
             role="dialog"
-            aria-label="Pick a folder icon"
+            aria-label="Folder settings"
           >
-            {FOLDER_ICONS.map((key) => {
-              const Ico = folderIconOf(key);
-              const sel = folders.find((f) => f.id === iconPop.id)?.icon === key;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  className={`lib-icon-cell ${sel ? 'sel' : ''}`}
-                  title={key}
-                  aria-label={`Icon: ${key}`}
-                  aria-pressed={sel}
-                  onClick={() => {
-                    setFolderIcon(iconPop.id, key);
-                    setIconPop(null);
-                  }}
-                >
-                  <Ico size={15} />
-                </button>
-              );
-            })}
+            <div className="lib-pop-lab">Color</div>
+            <div className="lib-pop-swatches">
+              {FOLDER_SWATCHES.map((c) => {
+                const sel = folders.find((f) => f.id === iconPop.id)?.color === c;
+                return (
+                  <button
+                    key={c}
+                    type="button"
+                    className={`lib-pop-swatch ${sel ? 'sel' : ''}`}
+                    style={{ background: c }}
+                    title={c}
+                    aria-label={`Color ${c}`}
+                    aria-pressed={sel}
+                    onClick={() => setFolderColor(iconPop.id, c)}
+                  />
+                );
+              })}
+            </div>
+            <div className="lib-pop-lab">Icon</div>
+            <div className="lib-pop-icons">
+              {FOLDER_ICONS.map((key) => {
+                const Ico = folderIconOf(key);
+                const sel = folders.find((f) => f.id === iconPop.id)?.icon === key;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`lib-icon-cell ${sel ? 'sel' : ''}`}
+                    title={key}
+                    aria-label={`Icon: ${key}`}
+                    aria-pressed={sel}
+                    onClick={() => setFolderIcon(iconPop.id, key)}
+                  >
+                    <Ico size={15} />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="lib-pop-acts">
+              <Btn
+                size="sm"
+                onClick={() => {
+                  const f = folders.find((x) => x.id === iconPop.id);
+                  if (f) startRename(f);
+                  setIconPop(null);
+                }}
+              >
+                <Pencil size={12} /> Rename
+              </Btn>
+              <Btn
+                size="sm"
+                variant="danger"
+                onClick={() => {
+                  const f = folders.find((x) => x.id === iconPop.id);
+                  setIconPop(null);
+                  if (f) removeFolder(f);
+                }}
+              >
+                <Trash2 size={12} /> Delete
+              </Btn>
+            </div>
           </div>,
           document.body
         )}
@@ -1032,6 +1122,8 @@ function FileCard({
   const folders = useWB((s) => s.libraryFolders);
   const moveFileToFolder = useWB((s) => s.moveFileToFolder);
   const setFolderFilter = useWB((s) => s.setLibraryFolderFilter);
+  const tagFilter = useWB((s) => s.libraryTagFilter);
+  const setTagFilter = useWB((s) => s.setLibraryTagFilter);
   const confirm = useConfirm();
   const [linking, setLinking] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -1145,8 +1237,8 @@ function FileCard({
         ) : (
           <div className="lib-cover-skel" aria-hidden="true" />
         )}
-        <span className="lib-page-badge mono" title="Current reading position">
-          p.{file.currentPage}/{file.pageCount}
+        <span className="lib-page-badge mono" title={file.kind === 'md' ? 'Markdown note' : 'Current reading position'}>
+          {file.kind === 'md' ? 'MD' : `p.${file.currentPage}/${file.pageCount}`}
         </span>
         {selecting && (
           <button
@@ -1220,12 +1312,12 @@ function FileCard({
           )}
         </div>
 
-        <div className="lib-progress" title={`${readPages} of ${file.pageCount} pages read`}>
+        <div className="lib-progress" title={file.kind === 'md' ? `${pct}% read` : `${readPages} of ${file.pageCount} pages read`}>
           <span className="pbar">
             <span style={{ width: `${pct}%` }} />
           </span>
           <span className="mono lib-progress-num">
-            {pct}% · {readPages}/{file.pageCount}p
+            {pct}%{file.kind === 'pdf' ? ` · ${readPages}/${file.pageCount}p` : ''}
           </span>
         </div>
 
@@ -1234,9 +1326,15 @@ function FileCard({
             <Clock size={11} /> {fmtDuration(minutes)}
           </span>
           {file.tags.slice(0, 3).map((t) => (
-            <span key={t} className="lib-tag">
+            <button
+              key={t}
+              type="button"
+              className={`lib-tag lib-tag-btn${tagFilter?.toLowerCase() === t.toLowerCase() ? ' on' : ''}`}
+              title={`Filter the library by “${t}”`}
+              onClick={() => setTagFilter(tagFilter?.toLowerCase() === t.toLowerCase() ? null : t)}
+            >
               {t}
-            </span>
+            </button>
           ))}
           {file.tags.length > 3 && (
             <span className="lib-tag" title={file.tags.slice(3).join(', ')}>
@@ -1279,6 +1377,183 @@ function FileCard({
         {linking && <LinkPicker file={file} onDone={() => setLinking(false)} />}
       </div>
     </article>
+  );
+}
+
+/* ---------- file row (list layout) ---------- */
+
+function FileRow({
+  file,
+  linkedCount,
+  onSelect,
+}: {
+  file: ResourceFile;
+  linkedCount: number;
+  onSelect: (file: ResourceFile, shift: boolean) => void;
+}) {
+  const folders = useWB((s) => s.libraryFolders);
+  const setFolderFilter = useWB((s) => s.setLibraryFolderFilter);
+  const tagFilter = useWB((s) => s.libraryTagFilter);
+  const setTagFilter = useWB((s) => s.setLibraryTagFilter);
+  const { cover, failed } = useCoverWithFallback(file);
+  const selecting = useSelectionMode();
+  const selected = useIsSelected(file.id);
+
+  const folder = folders.find((f) => f.id === file.folderId) ?? null;
+  const favCount = file.favoritePages?.length ?? 0;
+  const annoCount = file.annoPages?.length ?? 0;
+
+  const pct = wbFileProgress(file);
+  const st = wbFileDeadlineStatus(file);
+  const minutes = wbFileMinutes(file);
+
+  const openReader = () => window.dispatchEvent(new CustomEvent('wb-open-reader', { detail: file.id }));
+  const openEdit = () => window.dispatchEvent(new CustomEvent('wb-open-file-form', { detail: file.id }));
+
+  let dueChip: React.ReactNode = null;
+  if (file.deadline) {
+    const du = daysUntil(file.deadline);
+    const label =
+      pct >= 100 ? 'done'
+        : st === 'over' ? `${Math.abs(du)}d overdue`
+          : du === 0 ? 'due today'
+            : `${du}d left`;
+    const cls =
+      pct >= 100 ? 'chip-done'
+        : st === 'over' ? 'chip-over'
+          : st === 'soon' ? 'chip-soon'
+            : 'chip-ok';
+    dueChip = <span className={`chip ${cls}`}>{label}</span>;
+  }
+
+  return (
+    <div
+      className={`lib-row ${file.archived ? 'archived' : ''} ${selected ? 'selected' : ''}`}
+      role="listitem"
+      onClick={
+        selecting
+          ? (e) => {
+              const t = e.target as HTMLElement;
+              if (t.closest('button, select, input, textarea, a, label')) return;
+              onSelect(file, e.shiftKey);
+            }
+          : undefined
+      }
+    >
+      {selecting && (
+        <button
+          type="button"
+          className={`lib-check ${selected ? 'on' : ''}`}
+          aria-pressed={selected}
+          aria-label={selected ? `Deselect ${file.title}` : `Select ${file.title}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect(file, e.shiftKey);
+          }}
+        >
+          {selected && <Check size={13} />}
+        </button>
+      )}
+
+      <button
+        type="button"
+        className="lib-row-thumb"
+        title={selecting ? `Select "${file.title}"` : `Open "${file.title}" in the reader`}
+        onClick={() => (selecting ? onSelect(file, false) : openReader())}
+      >
+        {cover ? (
+          <img src={cover} alt="" loading="lazy" />
+        ) : failed ? (
+          <FileText size={15} aria-hidden="true" />
+        ) : (
+          <span className="lib-cover-skel" aria-hidden="true" />
+        )}
+      </button>
+
+      <div className="lib-row-main">
+        <button
+          type="button"
+          className="lib-row-title"
+          title={file.title}
+          onClick={() => (selecting ? onSelect(file, false) : openReader())}
+        >
+          {file.title}
+        </button>
+        <div className="lib-row-sub">
+          {file.kind === 'md' && <span className="chip">MD</span>}
+          {dueChip}
+          {file.archived && <span className="chip chip-ok">archived</span>}
+          {folder && (
+            <button
+              type="button"
+              className="lib-card-folder"
+              title={`In folder "${folder.name}" — click to filter`}
+              onClick={() => setFolderFilter(folder.id)}
+            >
+              <span className="lib-folder-dot-sm" style={{ background: folder.color }} />
+              <span className="lib-folder-name">{folder.name}</span>
+            </button>
+          )}
+          {favCount > 0 && (
+            <span className="lib-fav-chip" title="favorite pages">
+              <Star size={10} /> {favCount}
+            </span>
+          )}
+          {annoCount > 0 && (
+            <span className="lib-fav-chip anno" title="annotated pages">
+              <PenLine size={10} /> {annoCount}
+            </span>
+          )}
+          {linkedCount > 0 && (
+            <span className="lib-tag" title="Linked goals & tasks">
+              <Link2 size={10} /> {linkedCount}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div
+        className="lib-row-progress"
+        title={file.kind === 'md' ? `${pct}% read` : `${wbFileReadPages(file)} of ${file.pageCount} pages read`}
+      >
+        <span className="pbar">
+          <span style={{ width: `${pct}%` }} />
+        </span>
+        <span className="mono">{pct}%</span>
+      </div>
+
+      <div className="lib-row-tags">
+        {file.tags.slice(0, 2).map((t) => (
+          <button
+            key={t}
+            type="button"
+            className={`lib-tag lib-tag-btn${tagFilter?.toLowerCase() === t.toLowerCase() ? ' on' : ''}`}
+            title={`Filter the library by “${t}”`}
+            onClick={() => setTagFilter(tagFilter?.toLowerCase() === t.toLowerCase() ? null : t)}
+          >
+            {t}
+          </button>
+        ))}
+        {file.tags.length > 2 && (
+          <span className="lib-tag" title={file.tags.slice(2).join(', ')}>
+            +{file.tags.length - 2}
+          </span>
+        )}
+      </div>
+
+      <span className="lib-row-time mono" title="Total time spent in this file">
+        <Clock size={11} /> {fmtDuration(minutes)}
+      </span>
+
+      <div className="lib-row-acts">
+        <Btn size="sm" variant="primary" onClick={openReader}>
+          <BookOpen size={13} /> Read
+        </Btn>
+        <IconBtn small title="Edit details" onClick={openEdit}>
+          <Pencil size={13} />
+        </IconBtn>
+      </div>
+    </div>
   );
 }
 
@@ -1510,13 +1785,23 @@ export function LibraryView() {
 
   const query = search.trim();
   const q = query.toLowerCase();
+  const tagFilter = useWB((s) => s.libraryTagFilter);
+  const setTagFilter = useWB((s) => s.setLibraryTagFilter);
+  const layout = useWB((s) => s.libraryLayout);
+  const setLayout = useWB((s) => s.setLibraryLayout);
   const visible = useMemo(
     () =>
       sortFiles(
-        files.filter((f) => matchesFilter(f, filter) && matchesFolder(f, folderFilter) && matchesSearch(f, q)),
+        files.filter(
+          (f) =>
+            matchesFilter(f, filter) &&
+            matchesFolder(f, folderFilter) &&
+            matchesSearch(f, q) &&
+            matchesTag(f, tagFilter)
+        ),
         sort
       ),
-    [files, filter, folderFilter, q, sort]
+    [files, filter, folderFilter, q, sort, tagFilter]
   );
 
   /* selection: plain click toggles · shift-click selects the range on the visible list */
@@ -1552,11 +1837,11 @@ export function LibraryView() {
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const pdfs = Array.from(e.dataTransfer.files).filter(
-      (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)
+    const docs = Array.from(e.dataTransfer.files).filter(
+      (f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name) || isMarkdownFile(f)
     );
-    if (pdfs.length) void importPdfFiles(pdfs);
-    else toast('PDFs only', 'Drop PDF files to add them to the library.');
+    if (docs.length) void importPdfFiles(docs);
+    else toast('PDFs & Markdown only', 'Drop PDF or Markdown files to add them to the library.');
   };
 
   /* the full file-manager shell always renders (tree + stats + toolbar) — an empty shelf
@@ -1613,9 +1898,41 @@ export function LibraryView() {
             ) : (
               <span className="lib-count">
                 {visible.length} {visible.length === 1 ? 'file' : 'files'}
-                {filter !== 'all' || folderFilter !== 'all' ? ` of ${files.length}` : ''}
+                {filter !== 'all' || folderFilter !== 'all' || tagFilter ? ` of ${files.length}` : ''}
               </span>
             )}
+            {tagFilter && (
+              <button
+                type="button"
+                className="lib-tag-filter"
+                title="Clear tag filter"
+                onClick={() => setTagFilter(null)}
+              >
+                <Hash size={11} aria-hidden="true" /> {tagFilter}
+                <X size={11} aria-hidden="true" />
+              </button>
+            )}
+            <span className="lib-toolbar-space" />
+            <div className="lib-layout-seg" role="group" aria-label="Layout">
+              <IconBtn
+                small
+                title="Grid view"
+                aria-pressed={layout === 'grid'}
+                className={layout === 'grid' ? 'rd-on' : ''}
+                onClick={() => setLayout('grid')}
+              >
+                <LayoutGrid size={14} />
+              </IconBtn>
+              <IconBtn
+                small
+                title="List view"
+                aria-pressed={layout === 'list'}
+                className={layout === 'list' ? 'rd-on' : ''}
+                onClick={() => setLayout('list')}
+              >
+                <AlignJustify size={14} />
+              </IconBtn>
+            </div>
             <label className="lib-sort">
               <span>Sort</span>
               <select
@@ -1687,16 +2004,29 @@ export function LibraryView() {
             onDrop={onDrop}
           >
             {visible.length ? (
-              <div className="lib-grid">
-                {visible.map((f) => (
-                  <FileCard
-                    key={f.id}
-                    file={f}
-                    linkedCount={wbItemsForFile(items, f.id).length}
-                    onSelect={handleCardSelect}
-                  />
-                ))}
-              </div>
+              layout === 'list' ? (
+                <div className="lib-list" role="list">
+                  {visible.map((f) => (
+                    <FileRow
+                      key={f.id}
+                      file={f}
+                      linkedCount={wbItemsForFile(items, f.id).length}
+                      onSelect={handleCardSelect}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="lib-grid">
+                  {visible.map((f) => (
+                    <FileCard
+                      key={f.id}
+                      file={f}
+                      linkedCount={wbItemsForFile(items, f.id).length}
+                      onSelect={handleCardSelect}
+                    />
+                  ))}
+                </div>
+              )
             ) : q ? (
               <div className="empty-state">
                 <div className="es-title">No files match “{query}”</div>

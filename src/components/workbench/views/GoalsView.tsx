@@ -426,11 +426,14 @@ function BoardView() {
     <DndContext sensors={sensors} onDragStart={onDragStart} onDragEnd={onDragEnd}>
       <div className="board">
         {BOARD_COLS.map((col) => {
+          /* the progress<100 guard only hides ghost-completed cards from the
+             active columns — the Done column must show every done item, even
+             one whose children/checklist still read <100% */
           const colItems = items.filter(
             (i) =>
               (i.status || 'todo') === col.id &&
-              computeProgress(i, (id) => wbChildren(items, id)) < 100 &&
-              i.status !== 'archived'
+              i.status !== 'archived' &&
+              (col.id === 'done' || computeProgress(i, (id) => wbChildren(items, id)) < 100)
           );
           return <BoardColumn key={col.id} col={col} items={colItems} onOpen={openItemDetail} />;
         })}

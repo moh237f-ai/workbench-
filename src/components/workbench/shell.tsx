@@ -2,8 +2,9 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
-  Sun, LayoutGrid, Target, Repeat, BookOpen, Library as LibraryIcon, Waypoints,
+  Sun, LayoutGrid, Target, Repeat, BookOpen, BookA, Library as LibraryIcon, Waypoints,
   CalendarDays, CalendarClock, BarChart3,
   Inbox, Focus, Play, Square, Settings as SettingsIcon, Undo2, Redo2,
   Menu, Command, Zap, Timer as TimerIcon, CheckCircle2, X, PanelLeftClose,
@@ -27,6 +28,7 @@ const NAV: { id: ViewId; label: string; icon: React.ReactNode; shortcut: string 
   { id: 'journal', label: 'Journal', icon: <BookOpen />, shortcut: 'G J' },
   { id: 'calendar', label: 'Calendar', icon: <CalendarDays />, shortcut: 'G C' },
   { id: 'reports', label: 'Reports', icon: <BarChart3 />, shortcut: 'G R' },
+  { id: 'vocab', label: 'Vocabulary', icon: <BookA />, shortcut: 'G V' },
 ];
 
 /* ---------- Running timer pill ---------- */
@@ -60,103 +62,190 @@ function TimerPill() {
 
 /* ---------- Sidebar ---------- */
 
-export function Sidebar({
-  open,
-  onClose,
-  onOpenSettings,
-  onOpenPalette,
-}: {
+interface SidebarProps {
   open: boolean;
   onClose: () => void;
   onOpenSettings: () => void;
   onOpenPalette: () => void;
-}) {
-  const view = useWB((s) => s.view);
-  const setView = useWB((s) => s.setView);
-  const setFocusOpen = useWB((s) => s.setFocusOpen);
+}
+
+export function Sidebar(props: SidebarProps) {
   const collapsed = useWB((s) => s.sidebarCollapsed);
-  const toggleCollapsed = useWB((s) => s.toggleSidebarCollapsed);
+  const setCollapsed = useWB((s) => s.setSidebarCollapsed);
+  const [peek, setPeek] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* hover-peek is a desktop affordance only (mobile uses the drawer) */
+  const clearTimers = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    hoverTimer.current = null;
+    closeTimer.current = null;
+  };
+  const onRailEnter = () => {
+    if (!collapsed || props.open || window.matchMedia('(max-width: 900px)').matches) return;
+    clearTimers();
+    hoverTimer.current = setTimeout(() => setPeek(true), 150);
+  };
+  const schedulePeekClose = () => {
+    clearTimers();
+    closeTimer.current = setTimeout(() => setPeek(false), 120);
+  };
+  const cancelPeekClose = () => clearTimers();
+
+  useEffect(() => {
+    if (!peek) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setPeek(false);
+        clearTimers();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [peek]);
+
+  const expand = () => {
+    setCollapsed(false);
+    setPeek(false);
+    clearTimers();
+  };
 
   return (
     <>
-      {open && <div className="mobile-backdrop" onClick={onClose} aria-hidden="true" />}
-      <aside className={`wb-sidebar ${open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`} aria-label="Main navigation">
-        <div className="brand">
-          <div className="brand-mark">
-            <Target />
-          </div>
-          <span className="brand-name wb-display">Workbench</span>
+      {props.open && <div className="mobile-backdrop" onClick={props.onClose} aria-hidden="true" />}
+      <aside
+        className={`wb-sidebar ${props.open ? 'open' : ''} ${collapsed ? 'collapsed' : ''}`}
+        aria-label="Main navigation"
+        onMouseEnter={onRailEnter}
+        onMouseLeave={schedulePeekClose}
+      >
+        <SidebarInner {...props} collapsed={collapsed} peek={false} onExpand={expand} />
+      </aside>
+      {peek &&
+        createPortal(
+          <div
+            className="wb-sidebar peek"
+            role="navigation"
+            aria-label="Navigation preview"
+            onMouseEnter={cancelPeekClose}
+            onMouseLeave={schedulePeekClose}
+          >
+            <SidebarInner {...props} collapsed={false} peek onExpand={expand} />
+          </div>,
+          document.body
+        )}
+    </>
+  );
+}
+
+function SidebarInner({
+  open,
+  onClose,
+  onOpenSettings,
+  onOpenPalette,
+  collapsed,
+  peek,
+  onExpand,
+}: SidebarProps & { collapsed: boolean; peek: boolean; onExpand: () => void }) {
+  const view = useWB((s) => s.view);
+  const setView = useWB((s) => s.setView);
+  const toggleCollapsed = useWB((s) => s.toggleSidebarCollapsed);
+  const setFocusOpen = useWB((s) => s.setFocusOpen);
+
+  const go = (id: ViewId) => {
+    setView(id);
+    if (peek) onExpand(); /* peek click = navigate + expand */
+    else onClose();
+  };
+
+  return (
+    <>
+      <div className="brand">
+        <button
+          type="button"
+          className={`brand-mark ${collapsed && !peek ? 'brand-expand' : ''}`}
+          onClick={() => {
+            if (peek || collapsed) onExpand();
+          }}
+          title={collapsed && !peek ? 'Expand sidebar' : undefined}
+          aria-label={collapsed && !peek ? 'Expand sidebar' : 'Workbench'}
+          tabIndex={collapsed && !peek ? 0 : -1}
+        >
+          <Target />
+        </button>
+        <span className="brand-name wb-display">Workbench</span>
+        {!collapsed && (
           <button
             className="sb-collapse"
-            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
             onClick={toggleCollapsed}
-            style={collapsed ? { marginLeft: 0 } : { marginLeft: 'auto' }}
+            style={{ marginLeft: 'auto' }}
             type="button"
           >
             <PanelLeftClose size={16} />
           </button>
-          <button
-            className="icon-btn"
-            style={{ display: 'none' }}
-            id="sidebarCloseBtn"
-            aria-label="Close menu"
-            onClick={onClose}
-          >
-            <X />
-          </button>
-        </div>
-
-        <nav className="mainnav">
-          {NAV.map((n) => (
-            <button
-              key={n.id}
-              className={`navlink ${view === n.id ? 'active' : ''}`}
-              onClick={() => {
-                setView(n.id);
-                onClose();
-              }}
-              title={collapsed ? n.label : undefined}
-              aria-current={view === n.id ? 'page' : undefined}
-            >
-              {n.icon}
-              <span className="lbl">{n.label}</span>
-              <span className="nav-kbd">{n.shortcut}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-spacer" />
-
-        <TimerPill />
-
+        )}
         <button
-          className="focus-btn-sidebar"
-          onClick={() => {
-            setFocusOpen(true);
-            onClose();
-          }}
-          title={collapsed ? 'Focus mode' : undefined}
+          className="icon-btn"
+          style={{ display: 'none' }}
+          id="sidebarCloseBtn"
+          aria-label="Close menu"
+          onClick={onClose}
         >
-          <Focus />
-          <span className="lbl">Focus Mode</span>
-          <span className="nav-kbd">F</span>
+          <X />
         </button>
+      </div>
 
-        <div className="sidebar-foot">
-          <button className="sidebar-btn" onClick={onOpenSettings} title="Settings — theme, calendar, backup, shortcuts">
-            <SettingsIcon />
-            <span className="lbl">Settings</span>
-            <span className="nav-kbd">,</span>
+      <nav className="mainnav">
+        {NAV.map((n) => (
+          <button
+            key={n.id}
+            className={`navlink ${view === n.id ? 'active' : ''}`}
+            onClick={() => go(n.id)}
+            title={collapsed && !peek ? n.label : undefined}
+            aria-current={view === n.id ? 'page' : undefined}
+          >
+            {n.icon}
+            <span className="lbl">{n.label}</span>
+            <span className="nav-kbd">{n.shortcut}</span>
           </button>
-          <button className="sidebar-btn" onClick={onOpenPalette} title="Command palette (⌘K)">
-            <Command />
-            <span className="lbl">Commands</span>
-            <span className="nav-kbd">⌘K</span>
-          </button>
-          <SaveIndicator />
-        </div>
-      </aside>
+        ))}
+      </nav>
+
+      <div className="sidebar-spacer" />
+
+      <TimerPill />
+
+      <button
+        className="focus-btn-sidebar"
+        onClick={() => {
+          setFocusOpen(true);
+          if (peek) onExpand();
+          else onClose();
+        }}
+        title={collapsed && !peek ? 'Focus mode' : undefined}
+      >
+        <Focus />
+        <span className="lbl">Focus Mode</span>
+        <span className="nav-kbd">F</span>
+      </button>
+
+      <div className="sidebar-foot">
+        <button className="sidebar-btn" onClick={onOpenSettings} title="Settings — theme, calendar, backup, shortcuts">
+          <SettingsIcon />
+          <span className="lbl">Settings</span>
+          <span className="nav-kbd">,</span>
+        </button>
+        <button className="sidebar-btn" onClick={onOpenPalette} title="Command palette (⌘K)">
+          <Command />
+          <span className="lbl">Commands</span>
+          <span className="nav-kbd">⌘K</span>
+        </button>
+        {!collapsed && <SaveIndicator />}
+      </div>
     </>
   );
 }
@@ -282,7 +371,7 @@ export function StatusFooter() {
         {habitsDone}/{habits.length} habits
       </span>
       <span className="foot-spacer" />
-      <span className="foot-item" title="PDF files in your library">
+      <span className="foot-item opt-files" title="PDF files in your library">
         <BookOpen />
         {files.filter((f) => !f.archived).length} file{files.filter((f) => !f.archived).length === 1 ? '' : 's'}
       </span>
@@ -291,7 +380,7 @@ export function StatusFooter() {
         {stats.focusSessions} sessions · {fmtDuration(stats.focusMinutes)}
       </span>
       {stats.readingMinutes > 0 && (
-        <span className="foot-item" title="Total reading time and pages read">
+        <span className="foot-item opt-reading" title="Total reading time and pages read">
           <LibraryIcon />
           {fmtDuration(stats.readingMinutes)} read · {stats.pagesRead}p
         </span>

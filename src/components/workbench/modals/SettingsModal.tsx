@@ -10,9 +10,11 @@ import {
   CalendarDays, Calendar, Image as ImageIcon, Zap, Upload, Check,
 } from 'lucide-react';
 import { useWB } from '@/lib/workbench/store';
+import type { WBState } from '@/lib/workbench/store';
 import { buildICS, parseICS, todayStr } from '@/lib/workbench/helpers';
 import { Btn, Modal, toast } from '../ui/primitives';
 import type { CalendarSystem, ThemeId } from '@/lib/workbench/types';
+import pkg from '../../../../package.json';
 
 type Section = 'appearance' | 'shortcuts' | 'data' | 'commands';
 
@@ -87,6 +89,14 @@ export function SettingsModal({
   const setFocusAutoColor = useWB((s) => s.setFocusAutoColor);
   const sidebarCollapsed = useWB((s) => s.sidebarCollapsed);
   const toggleSidebarCollapsed = useWB((s) => s.toggleSidebarCollapsed);
+  const blinkReminder = useWB((s) => s.blinkReminder);
+  const setBlinkReminder = useWB((s) => s.setBlinkReminder);
+  const blinkIntervalMin = useWB((s) => s.blinkIntervalMin);
+  const setBlinkInterval = useWB((s) => s.setBlinkInterval);
+  const blinkStyle = useWB((s) => s.blinkStyle);
+  const setBlinkStyle = useWB((s) => s.setBlinkStyle);
+  const blinkContext = useWB((s) => s.blinkContext);
+  const setBlinkContext = useWB((s) => s.setBlinkContext);
   const exportData = useWB((s) => s.exportData);
   const importData = useWB((s) => s.importData);
   const items = useWB((s) => s.items);
@@ -247,6 +257,57 @@ export function SettingsModal({
             <Switch checked={sidebarCollapsed} onChange={toggleSidebarCollapsed} label="Compact sidebar" />
           </div>
 
+          <div className="set-row">
+            <div className="set-info">
+              <div className="set-title">Blink reminders</div>
+              <div className="set-sub">Gentle nudges to look away — reduces screen fatigue while reading or focusing.</div>
+            </div>
+            <Switch checked={blinkReminder} onChange={setBlinkReminder} label="Blink reminders" />
+          </div>
+
+          {blinkReminder && (
+            <>
+              <div className="set-row">
+                <div className="set-info">
+                  <div className="set-title">Every</div>
+                </div>
+                <div className="ins-seg" role="radiogroup" aria-label="Reminder interval">
+                  {[10, 20, 30].map((m) => (
+                    <button key={m} type="button" role="radio" aria-checked={blinkIntervalMin === m} className={blinkIntervalMin === m ? 'on' : ''} onClick={() => setBlinkInterval(m)}>
+                      {m} min
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="set-row">
+                <div className="set-info">
+                  <div className="set-title">Style</div>
+                  <div className="set-sub">Quiet toast, or a soft full-screen pulse.</div>
+                </div>
+                <div className="ins-seg" role="radiogroup" aria-label="Reminder style">
+                  {(['toast', 'overlay'] as WBState['blinkStyle'][]).map((st) => (
+                    <button key={st} type="button" role="radio" aria-checked={blinkStyle === st} className={blinkStyle === st ? 'on' : ''} onClick={() => setBlinkStyle(st)}>
+                      {st === 'toast' ? 'Toast' : 'Pulse'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="set-row">
+                <div className="set-info">
+                  <div className="set-title">Remind me</div>
+                  <div className="set-sub">Which activities trigger reminders.</div>
+                </div>
+                <div className="ins-seg" role="radiogroup" aria-label="Reminder context">
+                  {([['reading', 'Reading'], ['focus', 'Focus'], ['always', 'Always']] as [WBState['blinkContext'], string][]).map(([c, label]) => (
+                    <button key={c} type="button" role="radio" aria-checked={blinkContext === c} className={blinkContext === c ? 'on' : ''} onClick={() => setBlinkContext(c)}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+
           <div className="set-row" style={{ marginBottom: 0 }}>
             <div className="set-info">
               <div className="set-title" style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -337,6 +398,17 @@ export function SettingsModal({
           </div>
         </div>
       )}
+
+      <div className="set-row set-about" style={{ marginBottom: 0, marginTop: 14 }}>
+        <div className="set-info">
+          <div className="set-title">Workbench Aurora {pkg.version}</div>
+          <div className="set-sub">
+            Local-first &amp; fully offline — goals, planner, library, focus, habits, journal.
+            Your data lives only in this machine's profile and survives updates.
+          </div>
+        </div>
+        <span className="chip chip-ok">v{pkg.version}</span>
+      </div>
     </Modal>
   );
 }

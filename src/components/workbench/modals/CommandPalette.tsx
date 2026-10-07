@@ -8,8 +8,8 @@ import {
   Play, Square, Focus, Tag, Palette, Undo2, Sparkles, Search as SearchIcon,
   Settings2, FileText, Timer as TimerIcon,
 } from 'lucide-react';
-import { useWB, wbChildren, wbFileProgress } from '@/lib/workbench/store';
-import { computeProgress, computeStreak, fmtDuration } from '@/lib/workbench/helpers';
+import { useWB, wbChildren, wbFilePositionLabel, wbFileProgress } from '@/lib/workbench/store';
+import { computeHabitStreak, computeProgress, fmtDuration } from '@/lib/workbench/helpers';
 import { Modal } from '../ui/primitives';
 
 interface CmdRow {
@@ -74,7 +74,6 @@ export function CommandPalette({
       { id: 'v-habits', group: 'Go to', label: 'Habits', icon: <Repeat size={16} />, action: go('habits') },
       { id: 'v-journal', group: 'Go to', label: 'Journal', icon: <BookOpen size={16} />, action: go('journal') },
       { id: 'v-calendar', group: 'Go to', label: 'Calendar', icon: <CalendarDays size={16} />, action: go('calendar') },
-      { id: 'v-reports', group: 'Go to', label: 'Reports', icon: <BarChart3 size={16} />, action: go('reports') },
     ];
     return rows;
   }, [store.activeTimer, open]);
@@ -108,7 +107,7 @@ export function CommandPalette({
           id: `file-${f.id}`,
           group: 'Library',
           label: f.title,
-          sub: `${wbFileProgress(f)}% · p.${f.currentPage}/${f.pageCount}`,
+          sub: `${wbFileProgress(f)}% · ${wbFilePositionLabel(f)}`,
           icon: <FileText size={16} />,
           action: () => {
             onClose();
@@ -154,7 +153,7 @@ export function CommandPalette({
           id: `hb-${h.id}`,
           group: 'Habits',
           label: h.name,
-          sub: `streak ${computeStreak(h.log)}d`,
+          sub: `streak ${computeHabitStreak(h.log, h.cadence)}d`,
           icon: <Repeat size={16} />,
           action: () => { onClose(); store.setView('habits'); },
         });

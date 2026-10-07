@@ -297,6 +297,38 @@ export function computeStreak(log: Record<string, boolean>): number {
   return s;
 }
 
+/**
+ * Cadence-aware streak. Daily habits count consecutive days (today may still
+ * be pending); weekly habits count consecutive Mon-start weeks with at least
+ * one check-in (the current week may still be pending).
+ */
+export function computeHabitStreak(log: Record<string, boolean>, cadence: 'daily' | 'weekly'): number {
+  if (cadence === 'weekly') {
+    const weekStart = (d: Date): Date => {
+      const r = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const day = r.getDay();
+      r.setDate(r.getDate() + ((day === 0 ? -6 : 1) - day));
+      return r;
+    };
+    const weekDone = (ws: Date): boolean => {
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() + i);
+        if (log[isoDate(d)]) return true;
+      }
+      return false;
+    };
+    let s = 0;
+    let ws = weekStart(new Date());
+    if (!weekDone(ws)) ws = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() - 7);
+    while (weekDone(ws)) {
+      s++;
+      ws = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() - 7);
+    }
+    return s;
+  }
+  return computeStreak(log);
+}
+
 /* ---------- ICS ---------- */
 
 export function buildICS(items: Item[]): string {
@@ -338,4 +370,18 @@ export function parseICS(raw: string): { title: string; deadline: string; planne
     });
   });
   return out;
+}
+
+/* ---------- RTL detection ---------- */
+
+const RTL_RE = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const LTR_RE = /[A-Za-z\u00C0-\u024F]/;
+
+/** True when the first strong alphabetic character runs right-to-left. */
+export function isRtlText(s: string): boolean {
+  for (const ch of s) {
+    if (RTL_RE.test(ch)) return true;
+    if (LTR_RE.test(ch)) return false;
+  }
+  return false;
 }

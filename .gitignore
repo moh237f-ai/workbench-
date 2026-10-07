@@ -19,6 +19,7 @@ node_modules
 
 # production
 /build
+!build/
 
 # misc
 .DS_Store
@@ -52,3 +53,17 @@ prompt
 server.log
 # Skills directory
 /skills/
+# local artifacts
+node_modules
+.next
+*.log
+db/
+*.db
+screenshots/
+tool-results/
+upload/
+
+# desktop build artifacts
+/dist-app/
+/out/
+linux-unpacked/

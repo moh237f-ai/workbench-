@@ -7,7 +7,7 @@ import {
   TrendingUp, Waypoints, Zap,
 } from 'lucide-react';
 import {
-  useWB, wbChildren, wbFileDeadlineStatus, wbFileProgress, wbFileReadPages, wbInsights, wbIsBlocked,
+  useWB, wbChildren, wbFileDeadlineStatus, wbFilePositionLabel, wbFileProgress, wbFileReadPages, wbInsights, wbIsBlocked,
   wbPlannedMinutes, wbReadingMinutesInRange, wbReadingPagesInRange,
 } from '@/lib/workbench/store';
 import {
@@ -74,7 +74,7 @@ function ContinueCard({ file }: { file: ResourceFile }) {
         {file.title}
       </div>
       <div className="mono" style={{ fontSize: 11, color: 'var(--muted2)' }}>
-        p.{file.currentPage} of {file.pageCount}
+        {wbFilePositionLabel(file)}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <div className="pbar" style={{ flex: 1 }}><span style={{ width: `${pct}%` }} /></div>
@@ -158,7 +158,7 @@ export function DashboardView() {
         id: f.id,
         title: f.title,
         deadline: f.deadline!,
-        meta: `${wbFileReadPages(f)}/${f.pageCount} pages`,
+        meta: f.kind === 'md' ? `${wbFileProgress(f)}% read` : `${wbFileReadPages(f)}/${f.pageCount} pages`,
         color: f.color,
         status: raw === 'over' || raw === 'soon' ? raw : 'ok',
       });

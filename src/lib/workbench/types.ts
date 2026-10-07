@@ -14,7 +14,8 @@ export type ViewId =
   | 'habits'
   | 'journal'
   | 'calendar'
-  | 'reports';
+  | 'reports'
+  | 'vocab';
 
 export type ItemType = 'goal' | 'task' | 'note';
 export type ItemStatus = 'inbox' | 'todo' | 'in_progress' | 'waiting' | 'done' | 'archived';
@@ -106,7 +107,35 @@ export interface ActiveTimer {
 
 /* ==================== v4: Library (PDF files) ==================== */
 
-export type FileCoverMode = 'page' | 'custom';
+export type FileCoverMode = 'page' | 'custom' | 'text';
+
+/* ==================== v7: vocabulary (dictionary flashcards) ==================== */
+
+/** One part-of-speech sense from the dictionary lookup. */
+export interface VocabSense {
+  pos: string;
+  defs: string[];
+  syns: string[];
+  ants: string[];
+  ex: string[];
+}
+
+/** A saved word for review. Leitner box 0=learning … 5=mastered. */
+export interface VocabEntry {
+  id: string;
+  word: string;
+  lang: 'en';
+  translation: string | null; // Persian meaning when saved from the FA tab
+  senses: VocabSense[] | null; // null while only the translation is known
+  sourceFileId: string | null;
+  sourcePage: number | null;
+  createdAt: string;
+  box: number; // 0..5
+  lastReviewAt: string | null;
+  nextReviewAt: string; // ISO date
+}
+/** Library file kinds: PDF documents and Markdown notes/docs. */
+export type FileKind = 'pdf' | 'md';
 
 /** Library folder — user-created grouping for shelf organization (nested tree). */
 export interface LibraryFolder {
@@ -126,6 +155,7 @@ export type FolderIcon = (typeof FOLDER_ICONS)[number];
 
 export interface ResourceFile {
   id: string;
+  kind: FileKind; // 'pdf' rendered by pdf.js · 'md' rendered as markdown
   title: string;
   fileName: string;
   size: number; // bytes
@@ -145,16 +175,24 @@ export interface ResourceFile {
   folderId: string | null; // library folder
   lastReadAt: string | null;
   archived: boolean;
+  scrollProgress?: number; // 0-100 — reading progress for kind 'md'
 }
 
 /* ---------- v5: PDF annotations (pen / highlight / eraser) ---------- */
 
 export type AnnoTool = 'pen' | 'highlight';
+export type StrokeShape = 'rect' | 'ellipse' | 'line' | 'arrow';
 
 /** A freehand stroke, normalized to page dimensions (0..1) so it survives zoom. */
 export interface Stroke {
   id: string;
-  tool: AnnoTool;
+  tool: AnnoTool | 'whiteout';
+  shape?: StrokeShape | 'text'; // text boxes: points[0..1] = top-left/bottom-right
+  text?: string; // text-box content (canvas-rendered, Persian-safe)
+  fontSize?: number; // px at 1000px reference page width
+  font?: 'sans' | 'serif' | 'mono' | 'persian'; // text-box font family
+  group?: string; // linked strokes (e.g. whiteout patch + its replacement box) die together
+  note?: string; // user note attached to this annotation (sidebar)
   color: string;
   width: number; // px at 1000px reference page width
   opacity: number; // 0..1 (highlights render translucent)
@@ -167,8 +205,19 @@ export type PageAnnoMap = Record<string, Stroke[]>;
 
 /* ---------- v5: reader preferences ---------- */
 
-export type ReaderViewMode = 'single' | 'scroll';
-export type ReaderTool = 'select' | 'pen' | 'highlight' | 'eraser';
+export type ReaderViewMode = 'single' | 'scroll' | 'text' | 'split';
+export type ReaderTextFont = 'sans' | 'serif' | 'mono' | 'persian';
+export type ReaderTool =
+  | 'select'
+  | 'pen'
+  | 'highlight'
+  | 'eraser'
+  | 'rect'
+  | 'ellipse'
+  | 'line'
+  | 'arrow'
+  | 'text'
+;
 export type ReaderThemeMode = 'light' | 'dark' | 'warm' | 'custom';
 
 export interface ReaderPrefs {
@@ -178,8 +227,18 @@ export interface ReaderPrefs {
   custom: { brightness: number; contrast: number; sepia: number }; // percent, 100 = neutral
   penColor: string;
   penWidth: number; // px
+  penOpacity: number; // 0..1
   hlColor: string;
   hlWidth: number; // px
+  hlOpacity: number; // 0..1
+  recentColors: string[]; // most-recent-first, max 6
+  /* text reflow mode typography */
+  textFont: ReaderTextFont;
+  textSize: number; // px 14–28
+  textLineHeight: number; // 1.4–2.2
+  textWidth: number; // ch 40–80
+  eraserSize: number; // CSS px radius
+  eraserMode: 'stroke' | 'precise'; // whole strokes vs partial split
 }
 
 export const HL_SWATCHES = ['#FDE68A', '#86EFAC', '#93C5FD', '#F9A8D4', '#FDBA74', '#C4B5FD'];

@@ -6,7 +6,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import type {
   ActiveTimer, CalendarSystem, ClockType, Entry, FilePlanBlock, FocusClockCfg, FocusCustomBg,
   FocusTiming, GraphView, Habit, Item, ItemStatus, JournalEntry, Label, LibraryFolder,
-  ReadingSession, ReaderPrefs, ReportCustomRange, ReportRange, ResourceFile, Roadmap,
+  ReadingSession, ReaderPrefs, ReportCustomRange, ReportRange, ResourceFile, Roadmap, VocabEntry,
   RoadmapEdge, RoadmapNode, ThemeId, ViewId,
 } from './types';
 import { FOLDER_ICONS, SWATCHES, FOCUS_PRESETS, FOLDER_SWATCHES } from './types';
@@ -17,6 +17,7 @@ import {
 const STORAGE_KEY = 'workbench_aurora_v3';
 const MAX_HIST = 80;
 const MAX_READING_SESSIONS = 400;
+const SESSION_AGGREGATE_CHUNK = 100;
 
 /* ---------- defaults ---------- */
 
@@ -49,10 +50,12 @@ export function makeItem(partial: Partial<Item> = {}): Item {
 }
 
 export function makeFile(partial: Partial<ResourceFile> = {}): ResourceFile {
+  const kind: ResourceFile['kind'] = partial.kind ?? 'pdf';
   return {
     id: uid(),
-    title: 'Untitled PDF',
-    fileName: 'file.pdf',
+    kind,
+    title: kind === 'md' ? 'Untitled note' : 'Untitled PDF',
+    fileName: kind === 'md' ? 'note.md' : 'file.pdf',
     size: 0,
     pageCount: 1,
     addedAt: new Date().toISOString(),
@@ -81,8 +84,17 @@ export const DEFAULT_READER_PREFS: ReaderPrefs = {
   custom: { brightness: 100, contrast: 100, sepia: 0 },
   penColor: '#FB7185',
   penWidth: 3,
+  penOpacity: 1,
   hlColor: '#FDE68A',
   hlWidth: 18,
+  hlOpacity: 0.38,
+  recentColors: [],
+  textFont: 'sans',
+  textSize: 17,
+  textLineHeight: 1.75,
+  textWidth: 62,
+  eraserSize: 12,
+  eraserMode: 'stroke',
 };
 
 export function makeRoadmap(partial: Partial<Roadmap> = {}): Roadmap {
@@ -132,6 +144,8 @@ export interface WBState {
   activeRoadmapId: string | null;
   libraryFolders: LibraryFolder[];
   libraryFolderFilter: string; // 'all' | 'unfiled' | folder id
+  libraryTagFilter: string | null; // null = no tag filter
+  libraryLayout: 'grid' | 'list';
   librarySearch: string;
   readerPrefs: ReaderPrefs;
   /* v6: focus — custom backgrounds + flexible clock */
@@ -141,6 +155,12 @@ export interface WBState {
   /* v6: general */
   sidebarCollapsed: boolean;
   reportCustom: ReportCustomRange;
+  /* v7: vocabulary + eye care */
+  vocabulary: VocabEntry[];
+  blinkReminder: boolean;
+  blinkIntervalMin: number; // 10 | 20 | 30
+  blinkStyle: 'toast' | 'overlay';
+  blinkContext: 'reading' | 'focus' | 'always';
 
   /* ui */
   theme: ThemeId;
@@ -245,6 +265,8 @@ export interface WBState {
   moveLibraryFolder: (id: string, parentId: string | null) => void; // cycle-safe
   moveFileToFolder: (fileId: string, folderId: string | null) => void;
   setLibraryFolderFilter: (f: string) => void;
+  setLibraryTagFilter: (t: string | null) => void;
+  setLibraryLayout: (l: 'grid' | 'list') => void;
   setLibrarySearch: (q: string) => void;
 
   /* v5: reader — favorites + annotation mirror + prefs */
@@ -261,6 +283,18 @@ export interface WBState {
 
   /* v6: general */
   toggleSidebarCollapsed: () => void;
+  setSidebarCollapsed: (v: boolean) => void;
+
+  /* v7: vocabulary */
+  addVocab: (entry: { word: string; translation?: string | null; senses?: VocabEntry['senses'] | null; sourceFileId?: string | null; sourcePage?: number | null }) => VocabEntry | null;
+  removeVocab: (id: string) => void;
+  updateVocab: (id: string, patch: Partial<VocabEntry>) => void;
+  reviewVocab: (id: string, grade: 'again' | 'good' | 'easy') => void;
+  /* v7: eye care */
+  setBlinkReminder: (v: boolean) => void;
+  setBlinkInterval: (m: number) => void;
+  setBlinkStyle: (st: 'toast' | 'overlay') => void;
+  setBlinkContext: (c: 'reading' | 'focus' | 'always') => void;
 
   /* v5: roadmap utilities */
   duplicateRoadmap: (id: string) => Roadmap | null;
@@ -304,6 +338,7 @@ function coreSnapshot(s: WBState): string {
     readingSessions: s.readingSessions,
     filePlans: s.filePlans,
     roadmaps: s.roadmaps,
+    vocabulary: s.vocabulary,
   });
 }
 
@@ -349,6 +384,8 @@ export const useWB = create<WBState>()(
       activeRoadmapId: null,
       libraryFolders: [],
       libraryFolderFilter: 'all',
+      libraryTagFilter: null,
+      libraryLayout: 'grid',
       librarySearch: '',
       readerPrefs: { ...DEFAULT_READER_PREFS },
       focusCustomBgs: [],
@@ -356,6 +393,11 @@ export const useWB = create<WBState>()(
       focusAutoColor: true,
       sidebarCollapsed: false,
       reportCustom: { from: todayStr(), to: todayStr() },
+      vocabulary: [],
+      blinkReminder: false,
+      blinkIntervalMin: 20,
+      blinkStyle: 'overlay',
+      blinkContext: 'reading',
 
       theme: 'light',
       view: 'today',
@@ -572,14 +614,47 @@ export const useWB = create<WBState>()(
         })),
       logReadingSession: (session) => {
         if (session.minutes < 1) return; // ignore <1s noise
-        set((s) => ({
-          readingSessions: [...s.readingSessions, { ...session, id: uid() }].slice(-MAX_READING_SESSIONS),
-          stats: {
-            ...s.stats,
-            readingMinutes: s.stats.readingMinutes + session.minutes,
-            pagesRead: s.stats.pagesRead + session.pagesRead,
-          },
-        }));
+        set((s) => {
+          let list = [...s.readingSessions, { ...session, id: uid() }];
+          /* cap: never drop history — fold the oldest chunk into one summary
+             entry per day (daily totals for charts/reports stay exact) */
+          if (list.length > MAX_READING_SESSIONS) {
+            const cut = list.length - MAX_READING_SESSIONS + SESSION_AGGREGATE_CHUNK;
+            const old = list.slice(0, cut);
+            const byDay = new Map<string, { minutes: number; pages: number; visited: number; first: string; last: string }>();
+            for (const r of old) {
+              const b = byDay.get(r.date) ?? { minutes: 0, pages: 0, visited: 0, first: r.startedAt, last: r.endedAt };
+              b.minutes += r.minutes;
+              b.pages += r.pagesRead;
+              b.visited += r.pagesVisited;
+              if (r.startedAt < b.first) b.first = r.startedAt;
+              if (r.endedAt > b.last) b.last = r.endedAt;
+              byDay.set(r.date, b);
+            }
+            const summaries = [...byDay.entries()].map(([date, b]) => ({
+              id: `agg-${date}`,
+              fileId: 'aggregated',
+              date,
+              startedAt: b.first,
+              endedAt: b.last,
+              minutes: b.minutes,
+              pagesVisited: b.visited,
+              pagesRead: b.pages,
+              startPage: 0,
+              endPage: 0,
+            }));
+            const oldIds = new Set(old.map((r) => r.id));
+            list = [...list.filter((r) => !oldIds.has(r.id) || r.id.startsWith('agg-')), ...summaries];
+          }
+          return {
+            readingSessions: list,
+            stats: {
+              ...s.stats,
+              readingMinutes: s.stats.readingMinutes + session.minutes,
+              pagesRead: s.stats.pagesRead + session.pagesRead,
+            },
+          };
+        });
       },
       toggleItemFile: (itemId, fileId) =>
         set((s) => ({
@@ -731,6 +806,8 @@ export const useWB = create<WBState>()(
 
       /* ---------- v5: library folders + search ---------- */
       setLibraryFolderFilter: (f) => set({ libraryFolderFilter: f }),
+      setLibraryTagFilter: (t) => set({ libraryTagFilter: t }),
+      setLibraryLayout: (l) => set({ libraryLayout: l }),
       setLibrarySearch: (q) => set({ librarySearch: q }),
       addLibraryFolder: (name, parentId = null) => {
         const folder: LibraryFolder = {
@@ -938,7 +1015,10 @@ export const useWB = create<WBState>()(
         const t = s.activeTimer;
         if (!t?.pomodoro) return;
         const start = new Date(t.startedAt);
-        const end = new Date();
+        /* a currently-paused phase ends at the pause point, not wall-clock now —
+           paused time must never be billed into the logged entry */
+        const endMs = t.pomodoro.pausedAt ? new Date(t.pomodoro.pausedAt).getTime() : Date.now();
+        const end = new Date(endMs);
         const durationMin = Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000));
         const wasWork = t.pomodoro.phase === 'work';
         const entry = makeEntry({
@@ -976,7 +1056,9 @@ export const useWB = create<WBState>()(
         const t = s.activeTimer;
         if (!t) return;
         const start = new Date(t.startedAt);
-        const end = new Date();
+        /* same pause rule as advancePomodoro — don't bill the frozen pause */
+        const endMs = t.pomodoro?.pausedAt ? new Date(t.pomodoro.pausedAt).getTime() : Date.now();
+        const end = new Date(endMs);
         const durationMin = Math.max(1, Math.round((end.getTime() - start.getTime()) / 60000));
         const entry = makeEntry({
           date: isoDate(start),
@@ -1018,6 +1100,59 @@ export const useWB = create<WBState>()(
 
       /* ---------- v6: general ---------- */
       toggleSidebarCollapsed: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+      setSidebarCollapsed: (v) => set({ sidebarCollapsed: v }),
+
+      /* ---------- v7: vocabulary ---------- */
+      addVocab: ({ word, translation = null, senses = null, sourceFileId = null, sourcePage = null }) => {
+        const w = word.trim().toLowerCase();
+        if (!w) return null;
+        const s = get();
+        const existing = s.vocabulary.find((v) => v.word === w);
+        if (existing) {
+          /* enrich an existing entry with newly looked-up data */
+          const patch: Partial<VocabEntry> = {};
+          if (translation && !existing.translation) patch.translation = translation;
+          if (senses?.length && !existing.senses?.length) patch.senses = senses;
+          set((st) => ({ vocabulary: st.vocabulary.map((v) => (v.id === existing.id ? { ...v, ...patch } : v)) }));
+          return existing;
+        }
+        const entry: VocabEntry = {
+          id: uid(),
+          word: w,
+          lang: 'en',
+          translation,
+          senses,
+          sourceFileId,
+          sourcePage,
+          createdAt: new Date().toISOString(),
+          box: 0,
+          lastReviewAt: null,
+          nextReviewAt: new Date().toISOString().slice(0, 10),
+        };
+        set((st) => ({ vocabulary: [entry, ...st.vocabulary] }));
+        return entry;
+      },
+      removeVocab: (id) => {
+        get().snapshot();
+        set((s) => ({ vocabulary: s.vocabulary.filter((v) => v.id !== id) }));
+      },
+      updateVocab: (id, patch) =>
+        set((s) => ({ vocabulary: s.vocabulary.map((v) => (v.id === id ? { ...v, ...patch } : v)) })),
+      reviewVocab: (id, grade) =>
+        set((s) => ({
+          vocabulary: s.vocabulary.map((v) => {
+            if (v.id !== id) return v;
+            const box = grade === 'again' ? 0 : Math.min(5, v.box + (grade === 'easy' ? 2 : 1));
+            const days = [0, 1, 3, 7, 16, 35][box] ?? 1;
+            const next = new Date();
+            next.setDate(next.getDate() + Math.max(1, days));
+            return { ...v, box, lastReviewAt: new Date().toISOString(), nextReviewAt: next.toISOString().slice(0, 10) };
+          }),
+        })),
+      setBlinkReminder: (v) => set({ blinkReminder: v }),
+      setBlinkInterval: (m) => set({ blinkIntervalMin: m }),
+      setBlinkStyle: (st) => set({ blinkStyle: st }),
+      setBlinkContext: (c) => set({ blinkContext: c }),
 
       snapshot: () =>
         set((s) => ({
@@ -1042,6 +1177,19 @@ export const useWB = create<WBState>()(
           filePlans: prev.filePlans ?? s.filePlans,
           roadmaps: prev.roadmaps ?? s.roadmaps,
         });
+        /* blob-level consistency: page insertion writes IDB bytes that undo
+           must roll back too (see pdfwrite.blobBackups) */
+        void (async () => {
+          const ids = new Set<string>([
+            ...(s.files ?? []).map((f) => f.id),
+            ...(prev.files ?? []).map((f: Partial<ResourceFile> & { id?: string }) => f.id).filter(Boolean),
+          ]);
+          const { reconcileBlobAfterUndo } = await import('./pdfwrite');
+          for (const id of ids) {
+            const after = get().files.find((f) => f.id === id);
+            if (after && after.kind === 'pdf') await reconcileBlobAfterUndo(id, after.pageCount);
+          }
+        })();
         return true;
       },
       redo: () => {
@@ -1062,6 +1210,17 @@ export const useWB = create<WBState>()(
           filePlans: next.filePlans ?? s.filePlans,
           roadmaps: next.roadmaps ?? s.roadmaps,
         });
+        void (async () => {
+          const ids = new Set<string>([
+            ...(s.files ?? []).map((f) => f.id),
+            ...(next.files ?? []).map((f: Partial<ResourceFile> & { id?: string }) => f.id).filter(Boolean),
+          ]);
+          const { reconcileBlobAfterUndo } = await import('./pdfwrite');
+          for (const id of ids) {
+            const after = get().files.find((f) => f.id === id);
+            if (after && after.kind === 'pdf') await reconcileBlobAfterUndo(id, after.pageCount);
+          }
+        })();
         return true;
       },
 
@@ -1120,8 +1279,36 @@ export const useWB = create<WBState>()(
             ...p,
           }));
           const roadmaps = ((data.roadmaps as Partial<Roadmap>[]) || []).map((r) => makeRoadmap(r));
+          const vocabulary = ((data.vocabulary as Partial<VocabEntry>[]) || []).map((v) => ({
+            id: v.id || uid(),
+            word: v.word || '',
+            lang: 'en' as const,
+            translation: v.translation ?? null,
+            senses: v.senses ?? null,
+            sourceFileId: v.sourceFileId ?? null,
+            sourcePage: v.sourcePage ?? null,
+            createdAt: v.createdAt || new Date().toISOString(),
+            box: typeof v.box === 'number' ? v.box : 0,
+            lastReviewAt: v.lastReviewAt ?? null,
+            nextReviewAt: v.nextReviewAt || new Date().toISOString().slice(0, 10),
+          }));
+          const libraryFolders = ((data.libraryFolders as Partial<LibraryFolder>[]) || []).map((f) => ({
+            id: f.id || uid(),
+            name: f.name || 'Folder',
+            color: f.color || FOLDER_SWATCHES[0],
+            icon: (f.icon as string) || 'folder',
+            parentId: (f.parentId as string | null) ?? null,
+            createdAt: f.createdAt || new Date().toISOString(),
+          }));
+          const importedStats = (data.stats as WBState['stats']) || null;
+          const nextStats: WBState['stats'] = {
+            focusSessions: importedStats?.focusSessions ?? get().stats.focusSessions,
+            focusMinutes: importedStats?.focusMinutes ?? get().stats.focusMinutes,
+            readingMinutes: importedStats?.readingMinutes ?? get().stats.readingMinutes,
+            pagesRead: importedStats?.pagesRead ?? get().stats.pagesRead,
+          };
           get().snapshot();
-          set({ items, labels, entries, habits, journal, files, readingSessions, filePlans, roadmaps });
+          set({ items, labels, entries, habits, journal, files, readingSessions, filePlans, roadmaps, libraryFolders, vocabulary, stats: nextStats });
           return null;
         } catch (e) {
           return e instanceof Error ? e.message : 'Import failed';
@@ -1144,6 +1331,8 @@ export const useWB = create<WBState>()(
             readingSessions: s.readingSessions,
             filePlans: s.filePlans,
             roadmaps: s.roadmaps,
+            libraryFolders: s.libraryFolders,
+            vocabulary: s.vocabulary,
           },
           null,
           2
@@ -1155,7 +1344,24 @@ export const useWB = create<WBState>()(
       name: STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
-      version: 5,
+      version: 7,
+      /* deep-merge readerPrefs over the defaults: profiles written before a
+         pref was added (e.g. recentColors, added without a version bump)
+         would otherwise replace the defaults wholesale and crash readers on
+         the missing field. Covers this whole bug class for future prefs. */
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<WBState>;
+        const rp = (p.readerPrefs ?? {}) as Partial<ReaderPrefs>;
+        return {
+          ...current,
+          ...p,
+          readerPrefs: {
+            ...current.readerPrefs,
+            ...rp,
+            custom: { ...current.readerPrefs.custom, ...(rp.custom ?? {}) },
+          } as ReaderPrefs,
+        } as WBState;
+      },
       migrate: (persisted: unknown) => {
         const p = (persisted || {}) as Record<string, unknown>;
         const items = Array.isArray(p.items)
@@ -1175,11 +1381,32 @@ export const useWB = create<WBState>()(
           ...p,
           focusClockType: clockType,
           items,
-          files: Array.isArray(p.files) ? (p.files as Partial<ResourceFile>[]).map((f) => makeFile(f)) : [],
+          files: Array.isArray(p.files)
+            ? (p.files as Partial<ResourceFile>[]).map((f) => makeFile({ kind: 'pdf', ...f }))
+            : [],
           readingSessions: Array.isArray(p.readingSessions) ? p.readingSessions : [],
           filePlans: Array.isArray(p.filePlans) ? p.filePlans : [],
           roadmaps: Array.isArray(p.roadmaps) ? (p.roadmaps as Partial<Roadmap>[]).map((r) => makeRoadmap(r)) : [],
           activeRoadmapId: (p.activeRoadmapId as string | null) ?? null,
+          vocabulary: Array.isArray(p.vocabulary)
+            ? (p.vocabulary as Partial<VocabEntry>[]).map((v) => ({
+                id: v.id || uid(),
+                word: v.word || '',
+                lang: 'en' as const,
+                translation: v.translation ?? null,
+                senses: v.senses ?? null,
+                sourceFileId: v.sourceFileId ?? null,
+                sourcePage: v.sourcePage ?? null,
+                createdAt: v.createdAt || new Date().toISOString(),
+                box: typeof v.box === 'number' ? v.box : 0,
+                lastReviewAt: v.lastReviewAt ?? null,
+                nextReviewAt: v.nextReviewAt || new Date().toISOString().slice(0, 10),
+              }))
+            : [],
+          blinkReminder: (p.blinkReminder as boolean) ?? false,
+          blinkIntervalMin: (p.blinkIntervalMin as number) ?? 20,
+          blinkStyle: (p.blinkStyle as WBState['blinkStyle']) ?? 'overlay',
+          blinkContext: (p.blinkContext as WBState['blinkContext']) ?? 'reading',
           plannerMode: (p.plannerMode as 'day' | 'week') ?? 'day',
           plannerDate: (p.plannerDate as string) ?? todayStr(),
           libraryFilter: (p.libraryFilter as WBState['libraryFilter']) ?? 'all',
@@ -1194,6 +1421,8 @@ export const useWB = create<WBState>()(
               }))
             : [],
           libraryFolderFilter: (p.libraryFolderFilter as string) || 'all',
+          libraryTagFilter: (p.libraryTagFilter as string | null) ?? null,
+          libraryLayout: p.libraryLayout === 'list' ? 'list' : 'grid',
           librarySearch: (p.librarySearch as string) || '',
           readerPrefs: {
             ...DEFAULT_READER_PREFS,
@@ -1228,6 +1457,8 @@ export const useWB = create<WBState>()(
         libraryFilter: s.libraryFilter,
         libraryFolders: s.libraryFolders,
         libraryFolderFilter: s.libraryFolderFilter,
+        libraryTagFilter: s.libraryTagFilter,
+        libraryLayout: s.libraryLayout,
         librarySearch: s.librarySearch,
         readerPrefs: s.readerPrefs,
         focusClockType: s.focusClockType,
@@ -1255,6 +1486,11 @@ export const useWB = create<WBState>()(
         filePlans: s.filePlans,
         roadmaps: s.roadmaps,
         activeRoadmapId: s.activeRoadmapId,
+        vocabulary: s.vocabulary,
+        blinkReminder: s.blinkReminder,
+        blinkIntervalMin: s.blinkIntervalMin,
+        blinkStyle: s.blinkStyle,
+        blinkContext: s.blinkContext,
       }),
       onRehydrateStorage: () => (state) => {
         state?.setHydrated(true);
@@ -1376,8 +1612,21 @@ export function wbFileReadPages(file: ResourceFile): number {
 }
 
 export function wbFileProgress(file: ResourceFile): number {
+  if (file.kind === 'md') return Math.max(0, Math.min(100, Math.round(file.scrollProgress || 0)));
   if (!file.pageCount) return 0;
   return Math.round((wbFileReadPages(file) / file.pageCount) * 100);
+}
+
+/** Centralized "where am I" label: pages for PDFs, percent for markdown. */
+export function wbFilePositionLabel(file: ResourceFile): string {
+  if (file.kind === 'md') return `${Math.round(file.scrollProgress || 0)}%`;
+  return `p.${file.currentPage}/${file.pageCount}`;
+}
+
+/** Pages remaining, 0 for markdown (drives "N pages left" chips). */
+export function wbFilePagesLeft(file: ResourceFile): number {
+  if (file.kind === 'md') return Math.max(0, 100 - Math.round(file.scrollProgress || 0));
+  return Math.max(0, file.pageCount - wbFileReadPages(file));
 }
 
 export function wbFileSeconds(file: ResourceFile): number {

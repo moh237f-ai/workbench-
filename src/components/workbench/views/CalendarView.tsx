@@ -4,7 +4,7 @@
 import React, { useMemo } from 'react';
 import { ChevronLeft, ChevronRight, CalendarDays, Plus, Clock, CalendarClock } from 'lucide-react';
 import { useWB, wbChildren, wbTimeboxedItems } from '@/lib/workbench/store';
-import { computeProgress, fmtDateNice, fmtDuration, todayStr } from '@/lib/workbench/helpers';
+import { computeProgress, deadlineStatus, fmtDateNice, fmtDuration, todayStr } from '@/lib/workbench/helpers';
 import {
   SHAMSI_MONTHS, SHAMSI_WEEKDAYS_SHORT, buildGregorianMonthGrid, buildShamsiMonthGrid, dateToShamsi,
 } from '@/lib/workbench/shamsi';
@@ -161,19 +161,23 @@ export function CalendarView() {
                     {it.title}
                   </div>
                 ))}
-                {dayDeadlines.slice(0, 2).map((it) => (
-                  <div
-                    key={it.id}
-                    className="calendar-event deadline"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openItemDetail(it.id);
-                    }}
-                    title={`Deadline: ${it.title}`}
-                  >
-                    {it.title}
-                  </div>
-                ))}
+                {dayDeadlines.slice(0, 2).map((it) => {
+                  const dpct = computeProgress(it, (id) => wbChildren(items, id));
+                  const dst = deadlineStatus(it, dpct) ?? 'ok';
+                  return (
+                    <div
+                      key={it.id}
+                      className={`calendar-event deadline d-${dst}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openItemDetail(it.id);
+                      }}
+                      title={`Deadline: ${it.title}`}
+                    >
+                      {it.title}
+                    </div>
+                  );
+                })}
                 {dayDeadlines.length + dayTbx.length > 4 && (
                   <span className="calendar-more">+{dayDeadlines.length + dayTbx.length - 4} more</span>
                 )}

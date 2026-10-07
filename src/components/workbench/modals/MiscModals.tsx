@@ -5,7 +5,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Plus, Trash2, Check, Download, Upload, CalendarDays, Sparkles, Pencil, Flame, Zap, Clock, Minus,
 } from 'lucide-react';
-import { useWB, wbIsBlocked, wbPlannedItems, wbPlannedMinutes, wbPriorityWeight, wbReadyItems } from '@/lib/workbench/store';
+import { useWB, wbFilePositionLabel, wbIsBlocked, wbPlannedItems, wbPlannedMinutes, wbPriorityWeight, wbReadyItems } from '@/lib/workbench/store';
 import {
   buildICS, daysUntil, fmtDateNice, fmtDuration, isoDate, parseCapture, parseICS, priorityLabel, todayStr,
 } from '@/lib/workbench/helpers';
@@ -816,7 +816,7 @@ export function DailyPlanModal({ onClose }: { onClose: () => void }) {
                   <span className="goal-dot" style={{ background: 'var(--violet)', marginTop: 2 }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 650, fontSize: 13.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.title}</div>
-                    <div className="card-sub">p.{f.currentPage}/{f.pageCount} · due {fmtDateNice(f.deadline || '')}</div>
+                    <div className="card-sub">{wbFilePositionLabel(f)} · due {fmtDateNice(f.deadline || '')}</div>
                   </div>
                   <Btn
                     size="sm"

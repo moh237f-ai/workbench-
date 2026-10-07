@@ -29,6 +29,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   useWB,
   wbFileDeadlineStatus,
+  wbFilePagesLeft,
   wbFilePlansForDate,
   wbFileProgress,
   wbFileReadPages,
@@ -41,7 +42,7 @@ import {
   addDaysStr,
   clamp,
   computeProgress,
-  computeStreak,
+  computeHabitStreak,
   dateTimeFromMin,
   daysUntil,
   fmtDateNice,
@@ -97,7 +98,9 @@ function nextFreeSlot(duration: number, occupied: Slot[], fromMin: number): numb
     start += SNAP_MIN;
   }
   const lastEnd = occupied.reduce((m, b) => Math.max(m, b.end), 0);
-  return clamp(Math.max(480, lastEnd), 480, 1380);
+  /* keep the fallback inside the day so a scheduled block can never spill
+     past midnight — overlap warnings still flag it if it lands on a block */
+  return clamp(Math.max(480, lastEnd), 480, Math.max(480, 1440 - duration));
 }
 
 /* ---------- pointer drag ---------- */
@@ -786,7 +789,7 @@ function AddBlockPanel({
                     <span className="plan-add-row-title">{f.title}</span>
                     <span className="plan-add-row-sub">
                       <span className="chip chip-ok">
-                        {Math.max(0, f.pageCount - wbFileReadPages(f))}p left
+                        {f.kind === 'md' ? `${wbFilePagesLeft(f)}% left` : `${wbFilePagesLeft(f)}p left`}
                       </span>
                       <FileDueChip f={f} />
                     </span>
@@ -959,7 +962,7 @@ function HabitsStrip({ date }: { date: string }) {
         </div>
       </div>
       {habits.map((h) => {
-        const streak = computeStreak(h.log);
+        const streak = computeHabitStreak(h.log, h.cadence);
         return (
           <div key={h.id} className="plan-hab-row">
             <span className="plan-hab-name">
@@ -967,7 +970,7 @@ function HabitsStrip({ date }: { date: string }) {
               <span className="plan-hab-title" title={h.name}>
                 {h.name}
               </span>
-              {streak > 0 && <span className="chip chip-soon">{streak}d</span>}
+              {streak > 0 && <span className="chip chip-soon">{streak}{h.cadence === 'weekly' ? 'w' : 'd'}</span>}
             </span>
             <div className="plan-hab-days">
               {days.map((d) => {
@@ -1312,8 +1315,10 @@ function DayPlanner({ date }: { date: string }) {
       }
     };
     for (const it of suggested) {
-      if (planned >= capacity) break;
       const dur = it.estimateMin || 30;
+      /* never overshoot capacity — skip a task that doesn't fit and try the
+         next (smaller) one, mirroring DailyPlanModal's auto-fill */
+      if (planned + dur > capacity) continue;
       const start = nextFreeSlot(dur, occ, nowMinutes());
       ensureSnap();
       updateItem(it.id, {
@@ -1328,7 +1333,7 @@ function DayPlanner({ date }: { date: string }) {
     }
     let readings = 0;
     for (const f of readingGoals) {
-      if (readings >= 2 || planned >= capacity) break;
+      if (readings >= 2 || planned + 30 > capacity) break;
       const start = nextFreeSlot(30, occ, nowMinutes());
       ensureSnap();
       addFilePlan(f.id, date, start, 30);
@@ -2038,7 +2043,7 @@ function DayPlanner({ date }: { date: string }) {
                         ) : null}
                         {nx.kind === 'file' ? (
                           <span className="chip chip-ok">
-                            {Math.max(0, nx.file.pageCount - wbFileReadPages(nx.file))}p left
+                            {nx.file.kind === 'md' ? `${wbFilePagesLeft(nx.file)}% left` : `${wbFilePagesLeft(nx.file)}p left`}
                           </span>
                         ) : null}
                       </span>
@@ -2075,7 +2080,7 @@ function DayPlanner({ date }: { date: string }) {
           {readingGoals.length ? (
             <div className="plan-sug-list plan-scroll">
               {readingGoals.map((f) => {
-                const left = Math.max(0, f.pageCount - wbFileReadPages(f));
+                const left = wbFilePagesLeft(f);
                 const du = f.deadline ? daysUntil(f.deadline) : null;
                 const st = wbFileDeadlineStatus(f);
                 return (
@@ -2098,7 +2103,7 @@ function DayPlanner({ date }: { date: string }) {
                         {f.title}
                       </div>
                       <div className="plan-sug-chips">
-                        <span className="chip chip-ok">{left} pages left</span>
+                        <span className="chip chip-ok">{f.kind === 'md' ? `${left}% left` : `${left} pages left`}</span>
                         {st === 'over' && <span className="chip chip-over">overdue</span>}
                         {du === 0 && <span className="chip chip-soon">due today</span>}
                         {du !== null && du > 0 && (

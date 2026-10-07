@@ -5,9 +5,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Plus, Sparkles } from 'lucide-react';
 import { useWB } from '@/lib/workbench/store';
 import type { ViewId } from '@/lib/workbench/types';
-import { Btn, ToastStack, toast } from './ui/primitives';
+import { Btn, ToastStack, toast, useNow } from './ui/primitives';
 import { Sidebar, Topbar, StatusFooter } from './shell';
 import { FocusMode } from './focus/FocusMode';
+import { BlinkCare } from './BlinkCare';
 import { ItemFormModal, ItemDetailModal } from './modals/ItemModals';
 import {
   CaptureModal, DailyPlanModal, HabitFormModal, LabelsModal, TimeboxModal, DayPlannerModal,
@@ -16,6 +17,7 @@ import { CommandPalette } from './modals/CommandPalette';
 import { SettingsModal } from './modals/SettingsModal';
 import { ViewCtx } from './views/viewCtx';
 import { TodayView } from './views/TodayView';
+import { VocabularyView } from './views/VocabularyView';
 import { DashboardView } from './views/DashboardView';
 import { GoalsView, GoalsHeaderActions } from './views/GoalsView';
 import { HabitsView, HabitsHeaderActions } from './views/HabitsView';
@@ -33,6 +35,7 @@ import { ReaderOverlay } from './reader/ReaderOverlay';
 
 const HEADERS: Record<ViewId, [string, string]> = {
   today: ['Today', 'Your focus for the day — one screen, one decision.'],
+  vocab: ['Vocabulary', 'Words you met while reading — keep them.'],
   inbox: ['Inbox', 'Capture first. Clarify when you are ready.'],
   dashboard: ['Dashboard', 'Where things stand right now.'],
   goals: ['Goals & Work', 'Plan the work, break it down, watch it move.'],
@@ -49,6 +52,7 @@ const HEADERS: Record<ViewId, [string, string]> = {
 function ViewBody({ view }: { view: ViewId }) {
   switch (view) {
     case 'today': return <TodayView />;
+    case 'vocab': return <VocabularyView />;
     case 'inbox': return <InboxView />;
     case 'dashboard': return <DashboardView />;
     case 'goals': return <GoalsView />;
@@ -76,6 +80,32 @@ function ViewHeaderActions({ view }: { view: ViewId }) {
     case 'planner': return <PlannerHeaderActions />;
     default: return null;
   }
+}
+
+/* ---------- global pomodoro engine ----------
+   ONE always-mounted watcher advances pomodoro phases app-wide: with the
+   focus overlay closed, after closing the reader, etc. Previously each
+   surface (FocusMode + Reader) had its own effect, so phases froze at 00:00
+   once the overlay closed — and double-advanced when both were open. */
+function PomodoroEngine() {
+  const activeTimer = useWB((s) => s.activeTimer);
+  const pomodoro = !!activeTimer?.pomodoro;
+  const now = useNow(pomodoro);
+  useEffect(() => {
+    if (!pomodoro) return;
+    const st = useWB.getState();
+    const t = st.activeTimer;
+    if (!t?.pomodoro || t.pomodoro.pausedAt) return;
+    const timing = st.getFocusTiming();
+    if (timing.remaining > 0) return;
+    const wasWork = t.pomodoro.phase === 'work';
+    st.advancePomodoro();
+    toast(
+      wasWork ? 'Break time! ☕' : 'Back to work! 🧠',
+      wasWork ? 'Focus phase logged. Take a real break.' : 'Break over — next cycle starts now.'
+    );
+  }, [pomodoro, now]);
+  return null;
 }
 
 /* ---------- app ---------- */
@@ -139,6 +169,23 @@ export default function WorkbenchApp() {
     return () => window.removeEventListener('wb-open-reader', handler);
   }, []);
 
+  /* drops are only meaningful on dedicated zones (library shelf, folder rows,
+     planner columns); anywhere else a dropped file must NOT navigate —
+     Chromium's default navigates to file://…pdf, and in the desktop app that
+     lands on "This page couldn't load" (no PDF viewer). Zone handlers already
+     preventDefault; this window-level guard covers every other surface. */
+  useEffect(() => {
+    const stopNav = (e: DragEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener('dragover', stopNav);
+    window.addEventListener('drop', stopNav);
+    return () => {
+      window.removeEventListener('dragover', stopNav);
+      window.removeEventListener('drop', stopNav);
+    };
+  }, []);
+
   /* open the file edit modal (library cards) */
   useEffect(() => {
     const handler = (e: Event) => {
@@ -191,8 +238,43 @@ export default function WorkbenchApp() {
         return;
       }
       if (typing || e.altKey) return;
+      /* single-letter shortcuts are suppressed while a full-screen surface
+         owns the keyboard (reader has its own keymap; modals/focus stack) */
+      if (document.querySelector('.reader-overlay, .modal-overlay, .focus-overlay')) return;
 
       const key = e.key.toLowerCase();
+
+      /* the G-chord is checked FIRST — G C / G T / G F / G N must reach the
+         navigation map, not be stolen by the bare c/t/f/n shortcuts */
+      if (key === 'g' && !mod) {
+        e.preventDefault();
+        if (gPressed) {
+          /* G G is itself a destination (Goals) — don't just re-arm the chord */
+          gPressed = false;
+          if (gTimeout) clearTimeout(gTimeout);
+          setView('goals');
+          return;
+        }
+        gPressed = true;
+        if (gTimeout) clearTimeout(gTimeout);
+        gTimeout = setTimeout(() => (gPressed = false), 700);
+        return;
+      }
+      if (gPressed && !mod) {
+        const map: Record<string, ViewId> = {
+          t: 'today', i: 'inbox', d: 'dashboard', g: 'goals', l: 'reports',
+          h: 'habits', j: 'journal', c: 'calendar', r: 'reports',
+          b: 'library', m: 'roadmap', p: 'planner', v: 'vocab',
+        };
+        if (map[key]) {
+          e.preventDefault();
+          gPressed = false;
+          if (gTimeout) clearTimeout(gTimeout);
+          setView(map[key]);
+          return;
+        }
+      }
+
       if (key === 'f' && !mod) {
         e.preventDefault();
         setFocusOpen(true);
@@ -223,25 +305,6 @@ export default function WorkbenchApp() {
         e.preventDefault();
         setMSettings(true);
         return;
-      }
-      if (key === 'g' && !mod) {
-        if (gPressed) return;
-        gPressed = true;
-        if (gTimeout) clearTimeout(gTimeout);
-        gTimeout = setTimeout(() => (gPressed = false), 700);
-        return;
-      }
-      if (gPressed && !mod) {
-        const map: Record<string, ViewId> = {
-          t: 'today', i: 'inbox', d: 'dashboard', g: 'goals', l: 'reports',
-          h: 'habits', j: 'journal', c: 'calendar', r: 'reports',
-          b: 'library', m: 'roadmap', p: 'planner',
-        };
-        if (map[key]) {
-          e.preventDefault();
-          gPressed = false;
-          setView(map[key]);
-        }
       }
     };
     window.addEventListener('keydown', onKey);
@@ -357,15 +420,19 @@ export default function WorkbenchApp() {
         {mFileForm && (
           <FileFormModal fileId={mFileForm} onClose={() => setMFileForm(null)} />
         )}
-        <CommandPalette
-          open={mPalette}
-          onClose={() => setMPalette(false)}
-          onOpenLabels={() => setMLabels(true)}
-          onOpenSettings={() => setMSettings(true)}
-          onOpenCapture={() => setMCapture(true)}
-        />
+        {mPalette && (
+          <CommandPalette
+            open
+            onClose={() => setMPalette(false)}
+            onOpenLabels={() => setMLabels(true)}
+            onOpenSettings={() => setMSettings(true)}
+            onOpenCapture={() => setMCapture(true)}
+          />
+        )}
 
         <ToastStack />
+        <PomodoroEngine />
+        <BlinkCare />
       </div>
     </ViewCtx.Provider>
   );

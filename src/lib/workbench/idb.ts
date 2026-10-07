@@ -48,6 +48,9 @@ function tx<T>(store: string, mode: IDBTransactionMode, fn: (s: IDBObjectStore) 
 
 export async function putBlob(id: string, blob: Blob): Promise<void> {
   await tx(STORE_BLOBS, 'readwrite', (s) => s.put(blob, id));
+  /* any object URL handed out earlier points at the OLD bytes — drop it so
+     the next getBlobUrl re-reads fresh data (page insertion / md saves) */
+  releaseBlobUrl(id);
 }
 
 export async function getBlob(id: string): Promise<Blob | undefined> {
@@ -185,12 +188,17 @@ export function releaseBlobUrl(id: string): void {
   }
 }
 
-/** Delete every artifact of a file (blob, cover, annotations, urls). */
+/** Delete every artifact of a file (blob, cover, annotations, urls, metadata). */
 export async function purgeFileArtifacts(id: string): Promise<void> {
   releaseBlobUrl(id);
   coverCache.delete(id);
   coverInflight.delete(id);
   annoCache.delete(id);
+  try {
+    localStorage.removeItem(`covermeta:${id}`); // cover config mirror — otherwise leaks forever
+  } catch {
+    /* storage unavailable */
+  }
   await Promise.all([
     delBlob(id).catch(() => undefined),
     delCover(id).catch(() => undefined),

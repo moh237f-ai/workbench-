@@ -1,0 +1,35 @@
+appId: workbench.aurora
+productName: Workbench Aurora
+
+directories:
+  output: dist-app
+  buildResources: build
+
+files:
+  - electron/**/*
+  - out/**/*
+  - package.json
+  - "!**/node_modules/**"
+
+linux:
+  icon: build/icon.png
+  category: Office
+  maintainer: arian
+  syncDesktopName: true
+  desktop:
+    entry:
+      StartupWMClass: workbench-aurora
+      Comment: Local-first productivity workbench — fully offline
+  target:
+    - AppImage
+    - deb
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.AppImage
+
+deb:
+  artifactName: ${productName}-${version}-${arch}.deb
+  # poppler-utils provides pdftotext — the desktop text-extraction engine
+  # (reading-order extraction that handles legacy Persian/Arabic fonts)
+  depends:
+    - poppler-utils

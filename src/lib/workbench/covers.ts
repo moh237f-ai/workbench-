@@ -6,6 +6,45 @@
 
 import { useEffect, useState } from 'react';
 import type { ResourceFile } from './types';
+
+/** Typographic cover tile for markdown files — first heading on a color wash. */
+async function makeTextCover(file: ResourceFile): Promise<string> {
+  const canvas = document.createElement('canvas');
+  canvas.width = 420;
+  canvas.height = 560;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('no 2d context');
+  const base = file.color || '#0e8a7d';
+  const g = ctx.createLinearGradient(0, 0, 420, 560);
+  g.addColorStop(0, base);
+  g.addColorStop(1, '#15181d');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 420, 560);
+  ctx.fillStyle = 'rgba(255,255,255,0.14)';
+  ctx.fillRect(0, 0, 420, 8);
+  const raw = (file.title || 'Note').trim();
+  // wrap up to 4 lines
+  ctx.font = '700 40px "Sora Variable", "Inter Variable", sans-serif';
+  ctx.fillStyle = '#ffffff';
+  const words = raw.split(/\s+/);
+  const lines: string[] = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > 340 && line) {
+      lines.push(line);
+      line = w;
+      if (lines.length === 4) break;
+    } else line = test;
+  }
+  if (lines.length < 4 && line) lines.push(line);
+  const startY = 560 / 2 - ((lines.length - 1) * 52) / 2;
+  lines.forEach((l, i) => ctx.fillText(l, 40, startY + i * 52));
+  ctx.font = '650 17px "JetBrains Mono Variable", monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.62)';
+  ctx.fillText('MARKDOWN', 40, 560 - 44);
+  return canvas.toDataURL('image/jpeg', 0.8);
+}
 import { ensureCover, fetchCoverCached, invalidateCoverCache, saveCover } from './idb';
 import { loadFileDoc, pageToDataUrl } from './pdf';
 
@@ -42,6 +81,13 @@ export function useFileCover(file: ResourceFile | undefined): string | null {
       }
       const dataUrl = await ensureCover(file.id, async () => {
         if (file.coverMode === 'custom') return null; // custom covers are only uploaded, never generated
+        if (file.kind === 'md') {
+          try {
+            return await makeTextCover(file);
+          } catch {
+            return null;
+          }
+        }
         try {
           const doc = await loadFileDoc(file.id);
           return pageToDataUrl(doc, file.coverPage, 420, 0.72);

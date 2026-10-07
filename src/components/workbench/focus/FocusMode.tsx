@@ -12,7 +12,7 @@ import {
   Focus as FocusIcon, Target, Clock, Sparkles, BookOpen, Orbit, Layers, Type,
   Activity, Plus, SlidersHorizontal, Move, ImagePlus, Palette, Trash2, RotateCcw,
 } from 'lucide-react';
-import { useWB, wbFileProgress, wbFileReadPages } from '@/lib/workbench/store';
+import { useWB, wbFilePositionLabel, wbFileProgress, wbFileReadPages } from '@/lib/workbench/store';
 import { getFocusTiming } from '@/lib/workbench/helpers';
 import { FOCUS_BACKGROUNDS, FOCUS_BG_META, FOCUS_PRESETS, PEN_SWATCHES } from '@/lib/workbench/types';
 import type { ClockType, FocusBackgroundId } from '@/lib/workbench/types';
@@ -157,20 +157,6 @@ export function FocusMode() {
   const pomodoro = activeTimer?.pomodoro || null;
   const paused = timing.paused;
 
-  /* Auto-advance pomodoro phases globally while focus is open */
-  useEffect(() => {
-    if (!focusOpen) return;
-    if (pomodoro && !paused && timing.remaining <= 0) {
-      advancePomodoro();
-      toast(
-        pomodoro.phase === 'work' ? 'Break time! ☕' : 'Back to work! 🧠',
-        pomodoro.phase === 'work'
-          ? 'Focus phase logged. Take a real break.'
-          : 'Break over — next cycle starts now.'
-      );
-    }
-  }, [focusOpen, pomodoro, paused, timing.remaining, advancePomodoro]);
-
   /* Esc exits focus mode · B cycles atmosphere · ] size up · [ size down */
   useEffect(() => {
     if (!focusOpen) return;
@@ -271,7 +257,7 @@ export function FocusMode() {
   const focusFile = activeTimer?.fileId ? files.find((f) => f.id === activeTimer.fileId) : null;
   const contextTitle = (focusFile && `Reading · ${focusFile.title}`) || focusItem?.title || 'Open focus space';
   const contextNext = focusFile
-    ? `p.${focusFile.currentPage} of ${focusFile.pageCount} · ${wbFileReadPages(focusFile)} pages read · ${wbFileProgress(focusFile)}%`
+    ? `${wbFilePositionLabel(focusFile)} · ${focusFile.kind === 'md' ? `${wbFileProgress(focusFile)}% read` : `${wbFileReadPages(focusFile)} pages read`}`
     : focusItem?.nextAction ||
       (activeTimer?.note ? activeTimer.note : 'No task selected — focus on one useful thing.');
 
@@ -481,61 +467,58 @@ export function FocusMode() {
             ))}
           </div>
 
-          {(customBgs.length > 0 || true) && (
-            <>
-              <div className="focus-bg-panel-title" style={{ marginTop: 12 }}>
-                Your photos
-                <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>
-                  {' '}· from this device
-                </span>
-              </div>
-              <div className="focus-bg-grid">
-                {customBgs.map((b) => (
-                  <div key={b.id} className={`focus-bg-card has-x ${customBg?.id === b.id ? 'active' : ''}`}>
-                    <button
-                      type="button"
-                      className="focus-bg-card-main"
-                      onClick={() => setBackground(`custom:${b.id}`)}
-                      aria-pressed={customBg?.id === b.id}
-                    >
-                      <span className="focus-bg-thumb" style={{ backgroundImage: `url(${b.dataUrl})` }} aria-hidden="true" />
-                      {b.label}
-                    </button>
-                    <button
-                      type="button"
-                      className="focus-bg-x"
-                      title="Remove this background"
-                      aria-label={`Remove ${b.label}`}
-                      onClick={() => {
-                        removeFocusCustomBg(b.id);
-                        toast('Background removed', b.label);
-                      }}
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
+          {/* Your photos — always rendered so the Add-photo affordance is discoverable */}
+          <div className="focus-bg-panel-title" style={{ marginTop: 12 }}>
+            Your photos
+            <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 600 }}>
+              {' '}· from this device
+            </span>
+          </div>
+          <div className="focus-bg-grid">
+            {customBgs.map((b) => (
+              <div key={b.id} className={`focus-bg-card has-x ${customBg?.id === b.id ? 'active' : ''}`}>
                 <button
-                  className="focus-bg-add"
                   type="button"
-                  disabled={importingBg}
-                  onClick={() => bgFileRef.current?.click()}
+                  className="focus-bg-card-main"
+                  onClick={() => setBackground(`custom:${b.id}`)}
+                  aria-pressed={customBg?.id === b.id}
                 >
-                  <ImagePlus size={16} />
-                  <span>{importingBg ? 'Adding…' : 'Add photo'}</span>
+                  <span className="focus-bg-thumb" style={{ backgroundImage: `url(${b.dataUrl})` }} aria-hidden="true" />
+                  {b.label}
+                </button>
+                <button
+                  type="button"
+                  className="focus-bg-x"
+                  title="Remove this background"
+                  aria-label={`Remove ${b.label}`}
+                  onClick={() => {
+                    removeFocusCustomBg(b.id);
+                    toast('Background removed', b.label);
+                  }}
+                >
+                  <Trash2 size={12} />
                 </button>
               </div>
-              <input
-                ref={bgFileRef}
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                onChange={(e) => void onBgFilePicked(e.target.files?.[0] || null)}
-                aria-hidden="true"
-                tabIndex={-1}
-              />
-            </>
-          )}
+            ))}
+            <button
+              className="focus-bg-add"
+              type="button"
+              disabled={importingBg}
+              onClick={() => bgFileRef.current?.click()}
+            >
+              <ImagePlus size={16} />
+              <span>{importingBg ? 'Adding…' : 'Add photo'}</span>
+            </button>
+          </div>
+          <input
+            ref={bgFileRef}
+            type="file"
+            accept="image/*"
+            style={{ display: 'none' }}
+            onChange={(e) => void onBgFilePicked(e.target.files?.[0] || null)}
+            aria-hidden="true"
+            tabIndex={-1}
+          />
         </div>
       </div>
 

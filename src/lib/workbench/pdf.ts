@@ -27,11 +27,24 @@ export async function loadFileDoc(fileId: string): Promise<PDFDocumentProxy> {
     const lib = await getPdfjs();
     const url = await getBlobUrl(fileId);
     if (!url) throw new Error('PDF blob not found in local storage');
-    return lib.getDocument({ url }).promise;
+    return lib.getDocument({
+      url,
+      /* standard-14 font metrics + CJK cmaps: without these the TextLayer
+         measures with fallbacks and the selection layer misaligns with the
+         rendered glyphs (the invisible text sat at ~15px under a 90px title) */
+      standardFontDataUrl: '/pdfjs/standard_fonts/',
+      cMapUrl: '/pdfjs/cmaps/',
+      cMapPacked: true,
+    }).promise;
   })();
   docCache.set(fileId, p);
   p.catch(() => docCache.delete(fileId));
   return p;
+}
+
+/** Drop the cached document for a file (after the stored bytes change). */
+export function invalidateDocCache(fileId: string): void {
+  docCache.delete(fileId);
 }
 
 /** Load a PDF document from a raw File/Blob (upload flow — not cached). */
@@ -39,7 +52,12 @@ export async function loadDocFromBlob(blob: Blob): Promise<PDFDocumentProxy> {
   const lib = await getPdfjs();
   const url = URL.createObjectURL(blob);
   try {
-    return await lib.getDocument({ url }).promise;
+    return await lib.getDocument({
+      url,
+      standardFontDataUrl: '/pdfjs/standard_fonts/',
+      cMapUrl: '/pdfjs/cmaps/',
+      cMapPacked: true,
+    }).promise;
   } finally {
     URL.revokeObjectURL(url);
   }

@@ -6,7 +6,7 @@ import {
   Play, Plus, CalendarDays, Target, Clock, Repeat, BarChart3, Zap, Sparkles, BookOpen,
 } from 'lucide-react';
 import {
-  useWB, wbChildren, wbFileProgress, wbFileReadPages, wbIsBlocked, wbPickNextAction, wbPlannedItems, wbPlannedMinutes, wbReadyItems,
+  useWB, wbChildren, wbFilePositionLabel, wbFileProgress, wbFileReadPages, wbIsBlocked, wbPickNextAction, wbPlannedItems, wbPlannedMinutes, wbReadyItems,
 } from '@/lib/workbench/store';
 import {
   computeProgress, daysUntil, deadlineStatus, entriesInRange, fmtDateNice, fmtDuration, isoDate, startOfWeek, todayStr,
@@ -69,7 +69,7 @@ function ReadingMiniCard({ fileId }: { fileId: string }) {
           {file.title}
         </div>
         <div className="mono" style={{ fontSize: 11, color: 'var(--muted2)', margin: '3px 0 6px' }}>
-          p.{file.currentPage} of {file.pageCount} · {pages} read
+          {wbFilePositionLabel(file)}{file.kind === 'pdf' ? ` · ${pages} read` : ''}
         </div>
         <div className="pbar sm" style={{ marginBottom: 8 }}>
           <span style={{ width: `${pct}%`, background: 'var(--violet)' }} />

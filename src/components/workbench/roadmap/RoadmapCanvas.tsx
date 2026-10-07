@@ -134,7 +134,7 @@ export function nodeLive(node: RoadmapNode, items: Item[], files: ResourceFile[]
     if (!f) return { ...base, missing: true, title: node.label || 'Deleted file' };
     const pct = wbFileProgress(f);
     const read = wbFileReadPages(f);
-    const remaining = Math.max(0, f.pageCount - read);
+    const remaining = f.kind === 'md' ? 0 : Math.max(0, f.pageCount - read);
     const avgSec = wbFileAvgSecPerPage(f);
     const perPageMin = avgSec > 0 ? Math.max(1, Math.round(avgSec / 60)) : 1; // fallback: 1 min/page
     const tone = wbFileDeadlineStatus(f);

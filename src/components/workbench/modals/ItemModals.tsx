@@ -595,13 +595,13 @@ export function ItemDetailModal({
               >
                 Focus on this
               </Btn>
-              <Btn size="sm" onClick={() => { setItemStatus(item.id, 'done'); toast('Marked done', item.title); }}>
+              <Btn size="sm" onClick={() => { setItemStatus(item.id, 'done'); setStatus('done'); toast('Marked done', item.title); }}>
                 <Check size={14} /> Mark done
               </Btn>
             </>
           )}
           {item.status === 'done' && (
-            <Btn size="sm" onClick={() => { setItemStatus(item.id, 'todo'); toast('Reopened', item.title); }}>
+            <Btn size="sm" onClick={() => { setItemStatus(item.id, 'todo'); setStatus('todo'); toast('Reopened', item.title); }}>
               Reopen
             </Btn>
           )}
